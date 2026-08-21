@@ -13,7 +13,6 @@ class PermissionModel {
     }
 
     async findAll() {
-        console.log("PRISMA QUERY START");
         return prisma.permission.findMany({
             orderBy: {
                 module: "asc"

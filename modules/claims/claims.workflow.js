@@ -49,16 +49,8 @@ async review(
     return claim;
   }
 
-async approve(
-  claim,
-  actor,
-  comments
-) {
-  return claimApprovalService.advance(
-    claim,
-    actor,
-    comments
-  );
+async approve(claim, actor, comments, lineItemDecisions) {
+  return claimApprovalService.advance(claim, actor, comments, lineItemDecisions);
 }
 async cancel(
  claim,

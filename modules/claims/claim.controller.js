@@ -83,33 +83,18 @@ async getWorkflow(req,res,next){
   }
 async approve(req, res, next) {
   try {
-
-    console.log(
-      "APPROVE USER:",
-      JSON.stringify(req.user, null, 2)
-    );
-
     const claim = req.resource;
 
-    const result =
-      await claimWorkflow.approve(
-        claim,
-        req.user,
-        req.body.comments
-      );
-
-    return res.json({
-      success: true,
-      data: result
-    });
-
-  } catch (error) {
-
-    console.error(
-      "APPROVE ERROR:",
-      error
+    const result = await claimWorkflow.approve(
+      claim,
+      req.user,
+      req.body.comments,
+      req.body.lineItemDecisions   // ← NEW
     );
 
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    console.error("APPROVE ERROR:", error);
     next(error);
   }
 }
@@ -287,7 +272,7 @@ async approve(req, res, next) {
 async submit(req, res, next) {
   try {
     const result = await claimService.submit(req.user.id, req.body);
-    res.locals.entityId = result.claim.id;   // set before res.json
+    res.locals.entityId = result.claim.id;   
     return res.status(201).json({ success: true, data: result.claim, warning: result.duplicateWarning });
   } catch (error) { next(error); }
 }

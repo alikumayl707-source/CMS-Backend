@@ -116,8 +116,9 @@ router.post(
 
 router.get(
     "/:id",
-    authorize("CLAIM_VIEW"),
-    audit("VIEW_CLAIM", "CLAIM"),
+    loadClaimResource,
+    authorize("CLAIM_APPROVE"),
+    audit("CLAIM_APPROVE", "CLAIM"),
     claimController.getById
 );
 

@@ -26,16 +26,15 @@ model AuditLog {
 }
 
 model RoleCondition {
-  id        Int    @id @default(autoincrement())
-  roleId    Int
-  target    String
-  attribute String
-  operator  String
-  value     Json
-  role      Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
-
-  @@index([roleId])
-  @@map("role_conditions")
+  id           Int        @id @default(autoincrement())
+  roleId       Int
+  permissionId Int?        // NEW — null = applies to all, else scoped
+  target       String
+  attribute    String
+  operator     String
+  value        Json
+  role         Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission? @relation(fields: [permissionId], references: [id])
 }
 
 model AccessSimulation {
@@ -453,7 +452,7 @@ model Permission {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   rolePermissions RolePermission[]
-
+roleConditions  RoleCondition[] 
   @@map("permission")
 }
 

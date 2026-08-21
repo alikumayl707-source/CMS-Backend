@@ -15,8 +15,8 @@ module.exports = (permissionKey) => {
             include: {
               role: {
                 include: {
-                  rolePermissions: { include: { permission: true } },
-                  roleConditions: true
+                   rolePermissions: { include: { permission: true } },
+                roleConditions: { include: { permission: true } } 
                 }
               }
             }

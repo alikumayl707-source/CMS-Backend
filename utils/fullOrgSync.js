@@ -1,5 +1,5 @@
 const prisma = require("../prisma/index");
-const { getGraphToken, findOrCreateDepartment, findOrCreateDesignation } = require("./orgSync");
+const { getGraphToken, findOrCreateDepartment, findOrCreateDesignation, autoAssignRoleFromDesignation  } = require("./orgSync");
 
 async function syncFullOrganization() {
   const token = await getGraphToken();
@@ -51,6 +51,7 @@ async function syncFullOrganization() {
         orgSyncedAt: new Date()
       }
     });
+  await autoAssignRoleFromDesignation(localUser.id, designation?.id);   // ← NAYI LINE
 
     emailToLocalId.set(email.toLowerCase(), localUser.id);
   }

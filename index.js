@@ -213,11 +213,11 @@ app.use((req, res) => {
 
 
 app.use(errorHandler);
-startEscalationScheduler();
-startDigestScheduler();
+//startEscalationScheduler();
+//startDigestScheduler();
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+app.listen(3000, '0.0.0.0', () => {
   console.log(
     `MMC backend running on port ${PORT}`
   );

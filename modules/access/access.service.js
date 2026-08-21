@@ -23,7 +23,7 @@ class AccessService {
     return this.evaluateUser(user, permissionKey, resource);
   }
 
-  evaluateUser(user, permissionKey, resource) {
+evaluateUser(user, permissionKey, resource) {
 
     const roles = (user.userRoles || [])
       .filter(ur =>
@@ -37,12 +37,15 @@ class AccessService {
     }
 
     return roles.some(ur => {
-      const conditions = ur.role?.roleConditions || [];
+
+      const conditions = (ur.role?.roleConditions || [])
+        .filter(c => !c.permissionId || c.permission?.key === permissionKey);
+
       return conditions.every(condition =>
         evaluator.evaluateCondition(condition, user, resource)
       );
     });
-  }
+}
 
 }
 

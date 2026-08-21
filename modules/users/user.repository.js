@@ -144,7 +144,7 @@ email: user.email,
       }
     },
 
-    roleConditions: true
+    roleConditions: { include: { permission: true } } 
 
   }
 }

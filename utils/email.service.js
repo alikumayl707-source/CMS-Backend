@@ -106,7 +106,7 @@
   const token = await getGraphToken();
 
   const approvalUrl =
-    `${'process.env.FRONTEND_URL'}/claims/${claimId}/approve`;
+    `${process.env.FRONTEND_URL}/claims/${claimId}/approve`;
 
   const documentLinks =
     documents.length
@@ -170,7 +170,7 @@
                 <h3>Claim Documents</h3>
 
                 <ul style="text-decoration:none;">
-                    <a href="${approvalUrl}">${documentLinks}</a>
+                    <a href="${approvalUrl}"style="text-decoration:none;">${documentLinks}</a>
                 </ul>
 
                 <p>

@@ -73,7 +73,56 @@ async function findOrCreateDesignation(name) {
   if (!name) return null;
   return prisma.designation.upsert({ where: { name }, update: {}, create: { name } });
 }
+async function autoAssignRoleFromDesignation(userId, designationId) {
 
+  if (!designationId) return;
+
+  const designation = await prisma.designation.findUnique({
+    where: { id: designationId }
+  });
+
+  if (!designation) return;
+
+  let matchingRole = await prisma.role.findFirst({
+    where: { name: designation.name }
+  });
+
+  if (!matchingRole) {
+    const allRoles = await prisma.role.findMany({
+      select: { id: true, name: true }
+    });
+
+    const match = allRoles.find(
+      r => r.name?.toLowerCase() === designation.name?.toLowerCase()
+    );
+
+    if (match) {
+      matchingRole = await prisma.role.findUnique({ where: { id: match.id } });
+    }
+  }
+
+  if (!matchingRole) {
+    console.warn(
+      `orgSync: no Role found matching designation "${designation.name}" — ` +
+      `user ${userId} was NOT auto-assigned a role.`
+    );
+    return;
+  }
+
+  const alreadyAssigned = await prisma.userRole.findFirst({
+    where: { userId, roleId: matchingRole.id }
+  });
+
+  if (!alreadyAssigned) {
+    await prisma.userRole.create({
+      data: { userId, roleId: matchingRole.id }
+    });
+
+    console.log(
+      `orgSync: auto-assigned role "${matchingRole.name}" to user ${userId}.`
+    );
+  }
+}
 async function syncManagerChain(userEmail, localUser, token) {
   const managerRes = await fetch(
     `https://graph.microsoft.com/v1.0/users/${userEmail}/manager?$select=displayName,mail,userPrincipalName`,
@@ -209,6 +258,7 @@ if (managerRes.ok) {
 }
   const department = await findOrCreateDepartment(profile.department);
   const designation = await findOrCreateDesignation(profile.jobTitle);
+await autoAssignRoleFromDesignation(localUser.id, designation?.id);   // ← NAYI LINE
 
   return prisma.user.update({
     where: { id: localUser.id },
@@ -227,5 +277,6 @@ module.exports = {
   syncUserOrgProfile,
   findOrCreateDepartment,
   findOrCreateDesignation,
+  autoAssignRoleFromDesignation,
   getGraphToken
 };

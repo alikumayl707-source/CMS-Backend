@@ -298,6 +298,29 @@ async advance(claim, actor, comments) {
   this.validateSoD(claim, actor);
 
   await this.validateDepartmentalHead(claim, actor);
+ if (lineItemDecisions?.fieldName && claim.formData?.[lineItemDecisions.fieldName]) {
+
+    const fieldName = lineItemDecisions.fieldName;
+    const decisions = lineItemDecisions.decisions || {};
+
+    const updatedItems = claim.formData[fieldName].map((item, idx) => ({
+      ...item,
+      lineStatus: decisions[idx] ?? item.lineStatus ?? "APPROVED"
+    }));
+
+    const newAmount = updatedItems.reduce(
+      (sum, item) => item.lineStatus === "REJECTED" ? sum : sum + (Number(item.amount) || 0),
+      0
+    );
+
+    claim = await prisma.claim.update({
+      where: { id: claim.id },
+      data: {
+        formData: { ...claim.formData, [fieldName]: updatedItems },
+        amount: newAmount
+      }
+    });
+  }
 
   const matrix = claim.approvalMatrixId
     ? await prisma.approvalMatrix.findUnique({ where: { id: claim.approvalMatrixId } })
@@ -343,12 +366,7 @@ async advance(claim, actor, comments) {
 
   this.validateActorCanActOnStep(currentStep, actor, Number(claim.amount));
 
-  // FIX: `const result =` was missing — the transaction's return value was
-  // never captured, causing a "result is not defined" crash later. Also,
-  // there was a stray `tx.claim.update()` call OUTSIDE the transaction
-  // callback below (tx only exists inside the callback) — that was a second
-  // guaranteed crash, and it unconditionally forced systemStage to "FINANCE"
-  // even in the normal next-approver case, which was also logically wrong.
+
   const result = await prisma.$transaction(async (tx) => {
 
     await tx.claimApproval.update({
@@ -727,15 +745,15 @@ validateActorCanActOnStep(step, actor, claimAmount) {
     }
   }
 
-  const effectiveLimit = Number(
-    actor.approvalLimit ??
-    actor.designation?.defaultApprovalLimit ??
-    0
-  );
+  // const effectiveLimit = Number(
+  //   actor.approvalLimit ??
+  //   actor.designation?.defaultApprovalLimit ??
+  //   0
+  // );
 
-  if (Number(claimAmount) > effectiveLimit) {
-    throw new AppError(`Claim amount exceeds your approval limit (${effectiveLimit})`, 403);
-  }
+  // if (Number(claimAmount) > effectiveLimit) {
+  //   throw new AppError(`Claim amount exceeds your approval limit (${effectiveLimit})`, 403);
+  // }
 }
 
 async validateActorIsSystemDeptHead(claim, actor, isHR) {
