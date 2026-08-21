@@ -171,19 +171,7 @@ async saveDraft(userId, data) {
         throw new AppError("Draft has invalid fields", 400, { errors });
     }
 
-
-let resolvedAmount = 0;
-if (data.formData?.amount != null) {
-    const parsed = Number(data.formData.amount);
-    if (!Number.isNaN(parsed)) {
-        resolvedAmount = parsed;
-    } else {
-        console.warn(
-            `saveDraft: claim type "${claimType.code}" had a non-numeric ` +
-            `amount value "${data.formData.amount}" — defaulting amount to 0.`
-        );
-    }
-}
+    const resolvedAmount = this.resolveAmount(claimType.schema, data.formData ?? {});
 
     const payload = {
         claimTypeId: claimType.id,
@@ -191,7 +179,7 @@ if (data.formData?.amount != null) {
         customerId: data.customerId || null,
         incidentDate: data.incidentDate ? new Date(data.incidentDate) : null,
         formData: data.formData ?? {},
-        amount: resolvedAmount,   
+        amount: resolvedAmount,
         status: "DRAFT",
         createdBy: userId,
         departmentId: data.departmentId ?? null,
@@ -200,20 +188,11 @@ if (data.formData?.amount != null) {
     };
 
     if (data.id) {
-
         const existing = await claimRepository.findById(Number(data.id));
-
-        if (!existing) {
-            throw new AppError("Draft not found", 404);
-        }
-
+        if (!existing) throw new AppError("Draft not found", 404);
         if (existing.status !== "DRAFT") {
-            throw new AppError(
-                "Only claims in DRAFT status can be edited this way",
-                400
-            );
+            throw new AppError("Only claims in DRAFT status can be edited this way", 400);
         }
-
         return claimRepository.update(existing.id, payload);
     }
 
@@ -303,13 +282,7 @@ async submit(userId, data) {
 
     const claimNumber = await this.generateClaimNumber();
 
-    let resolvedAmount = existing.amount ? Number(existing.amount) : 0;
-    if (existing.formData?.amount != null) {
-        const parsed = Number(existing.formData.amount);
-        if (!Number.isNaN(parsed)) {
-            resolvedAmount = parsed;
-        }
-    }
+    const resolvedAmount = this.resolveAmount(claimType.schema, existing.formData ?? {});
 
     let approvalMatrixId = null;
 
@@ -334,7 +307,7 @@ async submit(userId, data) {
         dedupeHash,
         amount: resolvedAmount,
         submittedAt: new Date(),
-        approvalMatrixId,   // null for bypass types — fine, column is nullable
+        approvalMatrixId,
         isDuplicateSuspect: duplicateCheck.hasSuspectedDuplicates,
         duplicateOfId: duplicateCheck.matches[0]?.id || null
     };
@@ -367,7 +340,35 @@ async submit(userId, data) {
             : null
     };
 }
+resolveAmount(schema, formData) {
+  const source = schema?.amountSource;
 
+  if (!source?.controlName) {
+    if (schema?.rows?.some(row => row.length > 0)) {
+    }
+    return 0;
+  }
+
+  if (source.mode === 'field') {
+    const raw = formData?.[source.controlName];
+    const parsed = Number(raw);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  if (source.mode === 'sumArray') {
+    const items = formData?.[source.controlName];
+    if (!Array.isArray(items)) return 0;
+    return items.reduce((sum, item) => {
+      const parsed = Number(item?.[source.sumControlName]);
+      return sum + (Number.isNaN(parsed) ? 0 : parsed);
+    }, 0);
+  }
+
+  console.warn(
+    `resolveAmount: schema has amountSource with unrecognized mode "${source.mode}" — defaulting amount to 0.`
+  );
+  return 0;
+}
 async addDocuments(claimId, files, userId, documentTypeId) {
     await this.getById(claimId);
     if (!files || files.length === 0) {
