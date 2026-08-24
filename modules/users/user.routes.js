@@ -14,7 +14,7 @@ router.get(
     audit("VIEW_USERS", "USER"),
     userController.getAll
 );
-router.get('/me', /* sirf logged-in check, koi specific permission nahi chahiye */ userController.getCurrentUser);
+router.get('/me', userController.getCurrentUser);
 
 router.get(
     "/:id",

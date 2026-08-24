@@ -384,7 +384,7 @@ async addDocuments(claimId, files, userId, documentTypeId) {
                 size: file.size,
                 filePath: file.path,
                 uploadedById: userId,
-                documentTypeId: documentTypeId || null   // NEW
+                documentTypeId: documentTypeId || null  
             })
         )
     );
