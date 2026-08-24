@@ -94,8 +94,8 @@ router.get(
 );
 router.get(
   "/:id/documents/:docId/download",
-  authorize("CLAIM_DOCUMENT_VIEW"),
   loadClaimResource,
+  authorize("CLAIM_DOCUMENT_VIEW"),
   claimController.downloadDocument
 );
 router.put(
@@ -115,13 +115,17 @@ router.post(
 );
 
 router.get(
+  "/my-claims",
+  authorize("CLAIM_CREATE"),
+  claimController.getMyClaims
+);
+router.get(
     "/:id",
     loadClaimResource,
     authorize("CLAIM_APPROVE"),
     audit("CLAIM_APPROVE", "CLAIM"),
     claimController.getById
 );
-
 
 router.post(
     "/draft",

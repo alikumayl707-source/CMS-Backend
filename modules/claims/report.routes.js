@@ -37,6 +37,7 @@ router.get('/generate', async (req, res) => {
         claimType: claim.claimType?.name || '',
         status: claim.status,
         amount: claim.amount,
+        statge:claim.trackingStage,
         assignedApprover: claim.assignedApprover?.name || '',
         requiredApproverRole: claim.requiredApproverRole || '',
         createdDate: new Date(claim.createdAt).toLocaleDateString('en-GB'),
@@ -60,7 +61,7 @@ router.get('/generate', async (req, res) => {
         .replace(/([A-Z])/g, ' $1')
         .replace(/^./, (str) => str.toUpperCase()),
       key,
-      width: 25
+      width: 35
     }));
 
     worksheet.addRows(excelData);

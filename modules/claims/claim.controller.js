@@ -81,6 +81,27 @@ async getWorkflow(req,res,next){
           next(error);
       }
   }
+
+
+async getMyClaims(req, res, next) {
+  console.log(req)
+    try {
+
+        const result = await claimService.getMyClaims(
+            req.user.id,    
+            req.query
+        );
+
+        res.json({
+            success: true,
+            data: result.data,
+            pagination: result.pagination
+        });
+
+    } catch (error) {
+        next(error);
+    }
+}
 async approve(req, res, next) {
   try {
     const claim = req.resource;

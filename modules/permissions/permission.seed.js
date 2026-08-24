@@ -43,7 +43,12 @@ module.exports = [
     module: "CLAIMS"
   },
 
-  // Users
+{
+  "key": "FORM_BUILDER_MANAGE",
+  "label": "Manage Generic Form Builder",
+  "module": "FORM_BUILDER",
+  "description": "Create/edit dynamic claim form schemas — admin only"
+},
 
   {
     key: "USER_VIEW",

@@ -79,16 +79,34 @@ class ApprovalMatrixRepository {
     };
   }
 
-  async create(data) {
+ async create(data) {
 
-    // FIX: Number(undefined) === NaN, and `NaN ?? null` still evaluates to NaN
-    // because `??` only triggers on null/undefined, not NaN. Passing NaN into
-    // a Prisma Int field throws. This now resolves to a real null when no
-    // departmentId is supplied (i.e. a department-agnostic rule).
-    const resolvedDepartmentId =
-      data.departmentId !== undefined && data.departmentId !== null
-        ? Number(data.departmentId)
-        : null;
+  const resolvedDepartmentId =
+    data.departmentId !== undefined && data.departmentId !== null
+      ? Number(data.departmentId)
+      : null;
+
+  const minAmount = Number(data.minAmount);
+  const maxAmount = Number(data.maxAmount);
+
+
+  const overlapping = await prisma.approvalMatrix.findFirst({
+    where: {
+      claimType: data.claimType,
+      departmentId: resolvedDepartmentId,
+      minAmount: { lt: maxAmount },
+      maxAmount: { gt: minAmount }
+    }
+  });
+
+  if (overlapping) {
+    throw new Error(
+      `An overlapping approval workflow already exists for claim type ${data.claimType}, ` +
+      `department ${resolvedDepartmentId}, range ${overlapping.minAmount}-${overlapping.maxAmount}`
+    );
+  }
+
+
 
     const existingWorkflow = await prisma.approvalMatrix.findFirst({
       where: {

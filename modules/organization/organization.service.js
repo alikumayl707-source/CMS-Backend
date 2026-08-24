@@ -59,7 +59,7 @@ async syncFullOrg() {
       });
 
       if (!current || !current.reportsTo) {
-        return null; // reached the top of the chain with no match
+        return null; 
       }
 
       const manager = await prisma.user.findUnique({

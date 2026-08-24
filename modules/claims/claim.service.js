@@ -157,6 +157,22 @@ async resubmitAfterRejection(userId, data) {
 
     return this.submit(userId, data);
 }
+async getMyClaims(userId, query) {
+
+    const { status, claimTypeId, policyNumber, search, page, pageSize, ...rest } = query;
+
+
+    return claimRepository.findAll({
+        status,
+        search,
+        claimTypeId: claimTypeId ? Number(claimTypeId) : undefined,
+        createdBy: Number(userId),
+        policyNumber,
+        page: page ? Number(page) : 1,
+        pageSize: pageSize ? Number(pageSize) : 10,
+        ...rest,
+    });
+}
 async saveDraft(userId, data) {
 
     const claimType = await claimTypeService.getByCode(data.claimTypeCode);
@@ -344,29 +360,41 @@ resolveAmount(schema, formData) {
   const source = schema?.amountSource;
 
   if (!source?.controlName) {
-    if (schema?.rows?.some(row => row.length > 0)) {
-    }
     return 0;
   }
 
-  if (source.mode === 'field') {
+  // Single field amount
+  if (source.mode === "field") {
     const raw = formData?.[source.controlName];
     const parsed = Number(raw);
+
     return Number.isNaN(parsed) ? 0 : parsed;
   }
 
-  if (source.mode === 'sumArray') {
+  // Sum array rows
+  if (source.mode === "sumArray") {
     const items = formData?.[source.controlName];
-    if (!Array.isArray(items)) return 0;
-    return items.reduce((sum, item) => {
-      const parsed = Number(item?.[source.sumControlName]);
-      return sum + (Number.isNaN(parsed) ? 0 : parsed);
+
+    if (!Array.isArray(items)) {
+      return 0;
+    }
+
+    const total = items.reduce((sum, item) => {
+      const value = Number(
+        item?.[source.sumControlName]
+      );
+
+      return sum + (Number.isNaN(value) ? 0 : value);
     }, 0);
+
+    console.log(
+      "Calculated Claim Amount:",
+      total
+    );
+
+    return total;
   }
 
-  console.warn(
-    `resolveAmount: schema has amountSource with unrecognized mode "${source.mode}" — defaulting amount to 0.`
-  );
   return 0;
 }
 async addDocuments(claimId, files, userId, documentTypeId) {

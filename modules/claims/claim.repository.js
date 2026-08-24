@@ -46,28 +46,26 @@ async findAll({
     search,
     ...filters
 } = {}) {
- 
+
 const where = {
   ...(status ? { status } : {}),
   ...(claimTypeId ? { claimTypeId } : {}),
- 
+
+  ...(createdBy ? { createdBy } : {}),
+  ...(departmentId ? { departmentId } : {}),
+  ...(policyNumber ? { policyNumber: { contains: policyNumber } } : {}),
+
  ...(search
   ? {
       OR: [
-        {
-          claimNumber: {
-            contains: search
-          }
-        },
-        {
-          policyNumber: {
-            contains: search
-          }
-        }
+        { claimNumber: { contains: search } },
+        { policyNumber: { contains: search } }
       ]
     }
   : {})
 };
+
+// ... rest unchanged
  
 Object.entries(filters).forEach(([key, value]) => {
   if (value === undefined || value === null || value === '') return;
@@ -124,28 +122,49 @@ Object.entries(filters).forEach(([key, value]) => {
  
     const skip = (page - 1) * pageSize;
  
-    const [data, total] = await prisma.$transaction([
-        prisma.claim.findMany({
-            where,
-            include: includeDefault,
-            orderBy: {
-                createdAt: 'desc'
-            },
-            skip,
-            take: pageSize
-        }),
-        prisma.claim.count({ where })
-    ]);
- 
-    return {
-        data,
-        pagination: {
-            total,
-            page,
-            pageSize,
-            totalPages: Math.ceil(total / pageSize)
-        }
-    };
+const [data, total] = await prisma.$transaction([
+  prisma.claim.findMany({
+    where,
+    include: includeDefault,
+    orderBy: {
+      createdAt: 'desc'
+    },
+    skip,
+    take: pageSize
+  }),
+  prisma.claim.count({ where })
+]);
+
+const enrichedData = data.map(claim => ({
+  ...claim,
+ trackingStage:
+  claim.status === "APPROVED"
+    ? "✅ Claim Approved"
+
+    : claim.status === "REJECTED"
+    ? "❌ Claim Rejected"
+
+    : claim.systemStage === "FINANCE"
+    ? "💰 Awaiting Finance Approval"
+
+    : claim.systemStage === "HR"
+    ? "👥 Awaiting HR Approval"
+
+    : claim.requiredApproverRole
+    ? `⏳ Awaiting ${claim.requiredApproverRole}`
+
+    : "⏳ Pending Approval"
+}));
+
+return {
+  data: enrichedData,
+  pagination: {
+    total,
+    page,
+    pageSize,
+    totalPages: Math.ceil(total / pageSize)
+  }
+};
 }
 
     async findById(id) {

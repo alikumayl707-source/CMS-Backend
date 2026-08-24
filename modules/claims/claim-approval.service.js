@@ -77,7 +77,7 @@ async resolveClaimDepartmentId(claim) {
 
     try {
       await sendApprovalEmail({
-        to: approver.email,
+        to: process.env.ADMIN_EMAIL,
         approverName: approver.name,
         claimantName: claimWithDocuments.creator?.name,
         claimId: claim.id,
@@ -239,7 +239,6 @@ async initializeChain(claim, creatorId) {
 
     requiredRole =
       approver?.designation?.name ??
-      approver?.designation?.title ??
       approver?.name ??
       "APPROVER";
   }
@@ -286,7 +285,7 @@ async initializeChain(claim, creatorId) {
     assignedApproverId: firstAssignedApproverId
   };
 }
-async advance(claim, actor, comments) {
+async advance(claim, actor, comments, lineItemDecisions) {
 
   if (
     claim.status !== "PENDING_APPROVAL" &&
@@ -455,7 +454,6 @@ async advance(claim, actor, comments) {
 
         nextRequiredRole =
           nextApprover?.designation?.name ??
-          nextApprover?.designation?.title ??
           nextApprover?.name ??
           "APPROVER";
       }
@@ -745,6 +743,8 @@ validateActorCanActOnStep(step, actor, claimAmount) {
     }
   }
 
+  // // FIX: was commented out — approvers could approve amounts beyond
+  // // their limit, especially after lineItemDecisions changes the amount.
   // const effectiveLimit = Number(
   //   actor.approvalLimit ??
   //   actor.designation?.defaultApprovalLimit ??
