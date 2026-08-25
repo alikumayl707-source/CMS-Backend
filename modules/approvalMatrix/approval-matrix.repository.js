@@ -224,11 +224,14 @@ class ApprovalMatrixRepository {
   }
 
   async getMatchingWorkflow(claimType, departmentId, amount) {
-    return prisma.approvalMatrix.findMany({
+
+    const workflows = await prisma.approvalMatrix.findMany({
       where: {
         claimType,
         isActive: true,
-        ...(departmentId ? { departmentId } : {}),
+        ...(departmentId
+          ? { OR: [{ departmentId }, { departmentId: null }] }
+          : { departmentId: null }),
         ...(amount != null && !Number.isNaN(amount)
           ? {
               minAmount: { lte: amount },
@@ -243,6 +246,20 @@ class ApprovalMatrixRepository {
           include: { role: true, specificUser: true }
         }
       }
+    });
+   return workflows.sort((a, b) => {
+
+      const aSpecific = a.departmentId != null ? 1 : 0;
+      const bSpecific = b.departmentId != null ? 1 : 0;
+      if (aSpecific !== bSpecific) return bSpecific - aSpecific;
+
+      const aRange = Number(a.maxAmount) - Number(a.minAmount);
+      const bRange = Number(b.maxAmount) - Number(b.minAmount);
+      if (aRange !== bRange) return aRange - bRange;
+
+      if (a.version !== b.version) return b.version - a.version;
+
+      return b.id - a.id;
     });
   }
 

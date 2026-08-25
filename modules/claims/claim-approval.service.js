@@ -77,7 +77,7 @@ async resolveClaimDepartmentId(claim) {
 
     try {
       await sendApprovalEmail({
-        to: process.env.ADMIN_EMAIL,
+        to: approver.email,
         approverName: approver.name,
         claimantName: claimWithDocuments.creator?.name,
         claimId: claim.id,
@@ -94,7 +94,7 @@ async resolveClaimDepartmentId(claim) {
     }
   }
 
-async initializeChain(claim, creatorId) {
+async initializeChain(claim, creatorId, resolvedMatrix = null) {
 
   const creator = await prisma.user.findUnique({
     where: { id: creatorId }
@@ -149,7 +149,8 @@ async initializeChain(claim, creatorId) {
 
   const claimDepartmentId = await this.resolveClaimDepartmentId(claim);
 
-  const matrix = await approvalMatrixService.determineWorkflow({
+
+  const matrix = resolvedMatrix ?? await approvalMatrixService.determineWorkflow({
     claimType: claimType.code,
     departmentId: claimDepartmentId,
     amount: Number(claim.amount),
@@ -160,17 +161,18 @@ async initializeChain(claim, creatorId) {
     throw new AppError("No workflow found", 422);
   }
 
-
   await prisma.claim.update({
     where: { id: claim.id },
-    data: { approvalMatrixId: matrix.id } // requires a nullable approvalMatrixId column on Claim — see schema note below
+    data: { approvalMatrixId: matrix.id }
   });
 
-  const existingChain = await prisma.claimApproval.count({
+  const existingChain = await prisma.claimApproval.findMany({
     where: { claimId: claim.id }
   });
 
-  if (existingChain > 0) {
+  const hasActiveStep = existingChain.some(step => step.status === "PENDING");
+
+  if (hasActiveStep) {
     throw new AppError("Approval chain already exists for this claim", 400);
   }
 
@@ -245,7 +247,29 @@ async initializeChain(claim, creatorId) {
 
   const updatedClaim = await prisma.$transaction(async (tx) => {
 
-    await tx.claimApproval.createMany({ data: approvalRows });
+    for (const row of approvalRows) {
+      await tx.claimApproval.upsert({
+        where: {
+          claimId_sequence: {
+            claimId: row.claimId,
+            sequence: row.sequence
+          }
+        },
+        update: {
+          roleId: row.roleId,
+          approverId: row.approverId,
+          isParallel: row.isParallel,
+          groupKey: row.groupKey,
+          status: "PENDING",
+          actionedAt: null,
+          comments: null,
+          escalatedAt: null,
+          dueAt: null,
+          reminderSentAt: null
+        },
+        create: row
+      });
+    }
 
     return tx.claim.update({
       where: { id: claim.id },

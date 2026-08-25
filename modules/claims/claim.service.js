@@ -300,21 +300,22 @@ async submit(userId, data) {
 
     const resolvedAmount = this.resolveAmount(claimType.schema, existing.formData ?? {});
 
-    let approvalMatrixId = null;
+    let resolvedWorkflow = null;
 
     if (!claimType.bypassApprovalChain) {
-        const workflow = await approvalMatrixService.determineWorkflow({
+
+        const claimDepartmentId = await claimApprovalService.resolveClaimDepartmentId(existing);
+
+        resolvedWorkflow = await approvalMatrixService.determineWorkflow({
             claimType: claimType.code,
-            departmentId: existing.departmentId,
+            departmentId: claimDepartmentId,
             amount: resolvedAmount,
             ...(existing.formData || {})
         });
 
-        if (!workflow) {
+        if (!resolvedWorkflow) {
             throw new AppError("No approval workflow found", 422);
         }
-
-        approvalMatrixId = workflow.id;
     }
 
     const payload = {
@@ -323,14 +324,14 @@ async submit(userId, data) {
         dedupeHash,
         amount: resolvedAmount,
         submittedAt: new Date(),
-        approvalMatrixId,
+        approvalMatrixId: resolvedWorkflow?.id ?? null,
         isDuplicateSuspect: duplicateCheck.hasSuspectedDuplicates,
         duplicateOfId: duplicateCheck.matches[0]?.id || null
     };
 
     let claim = await claimRepository.update(existingId, payload);
 
-    await claimApprovalService.initializeChain(claim, userId);
+    await claimApprovalService.initializeChain(claim, userId, resolvedWorkflow);
 
     claim = await claimRepository.findById(existingId);
 
@@ -357,45 +358,62 @@ async submit(userId, data) {
     };
 }
 resolveAmount(schema, formData) {
-  const source = schema?.amountSource;
+  const source = schema?.amountSource ?? this.detectAmountSourceFallback(schema);
 
   if (!source?.controlName) {
     return 0;
   }
 
-  // Single field amount
   if (source.mode === "field") {
     const raw = formData?.[source.controlName];
     const parsed = Number(raw);
-
     return Number.isNaN(parsed) ? 0 : parsed;
   }
 
-  // Sum array rows
   if (source.mode === "sumArray") {
     const items = formData?.[source.controlName];
+    if (!Array.isArray(items)) return 0;
 
-    if (!Array.isArray(items)) {
-      return 0;
-    }
-
-    const total = items.reduce((sum, item) => {
-      const value = Number(
-        item?.[source.sumControlName]
-      );
-
+    return items.reduce((sum, item) => {
+      const value = Number(item?.[source.sumControlName]);
       return sum + (Number.isNaN(value) ? 0 : value);
     }, 0);
+  }
 
-    console.log(
-      "Calculated Claim Amount:",
-      total
-    );
-
-    return total;
+  if (source.mode === "sumGroup") {
+    const groupValue = formData?.[source.controlName];
+    const value = Number(groupValue?.[source.sumControlName]);
+    return Number.isNaN(value) ? 0 : value;
   }
 
   return 0;
+}
+
+detectAmountSourceFallback(schema) {
+  const rows = schema?.rows ?? [];
+  const allFields = rows.flat();
+
+  const containsAmountField = (field) => {
+    if (field.controlName === 'amount') return true;
+    return (field.children ?? []).some(containsAmountField);
+  };
+
+  const arrayAmount = allFields.find(f => f.type === 'array' && containsAmountField(f));
+  if (arrayAmount) {
+    return { controlName: arrayAmount.controlName, mode: 'sumArray', sumControlName: 'amount' };
+  }
+
+  const groupAmount = allFields.find(f => f.type === 'group' && containsAmountField(f));
+  if (groupAmount) {
+    return { controlName: groupAmount.controlName, mode: 'sumGroup', sumControlName: 'amount' };
+  }
+
+  const scalarAmount = allFields.find(f => f.controlName === 'amount' && f.type !== 'array' && f.type !== 'group');
+  if (scalarAmount) {
+    return { controlName: 'amount', mode: 'field' };
+  }
+
+  return null;
 }
 async addDocuments(claimId, files, userId, documentTypeId) {
     await this.getById(claimId);

@@ -35,6 +35,8 @@ async getCurrentUser(req, res, next) {
         id: user.id,
         name: user.name,
         email: user.email,
+         departmentId: user.departmentId,
+        department: user.department?.name ?? null,
         permissionKeys: [...new Set(permissionKeys)]
       }
     });
