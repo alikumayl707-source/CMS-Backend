@@ -314,7 +314,11 @@ async submit(userId, data) {
         });
 
         if (!resolvedWorkflow) {
-            throw new AppError("No approval workflow found", 422);
+throw new AppError(
+  "Approval process is missing. Please configure approvers for this claim.",
+  422
+);
+
         }
     }
 
