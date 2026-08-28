@@ -7,8 +7,6 @@ const {
 } = require("../../utils/email.service");
 const notificationService =
  require("../workflow/notification.service");
-const historyService =
- require("../workflow/claim-history.service");
 const prisma = require("../../prisma/index"); 
 
 class ClaimApprovalService {
@@ -58,44 +56,138 @@ async resolveClaimDepartmentId(claim) {
     return dept.id;
   }
 
-  async notifyApprover(approver, claim, claimWithDocuments) {
+async notifyApprover(
+  approver,
+  claim,
+  claimWithDocuments
+) {
+const vendorWorkflowClaimTypes =
+  (process.env.VENDOR_WORKFLOW_CLAIM_TYPES || '')
+    .split(',')
+    .map(x => x.trim().toUpperCase())
+    .filter(Boolean);
+  const claimTypeCode =
+    claimWithDocuments?.claimType?.code?.toUpperCase();
 
-    if (!approver) {
-      console.warn(
-        `Approval routing: no approver resolved for claim ${claim.id}. Nobody notified.`
-      );
-      return;
-    }
+  const approvalMatrixId =
+    claimWithDocuments?.approvalMatrixId ??
+    claim.approvalMatrixId ??
+    null;
 
-    if (!approver.email) {
-      console.warn(
-        `Approval routing: approver ${approver.id} (${approver.name}) has no email on file. ` +
-        `Claim ${claim.id} is now assigned to them but NO EMAIL WAS SENT.`
+const isVendorWorkflow =
+  vendorWorkflowClaimTypes.includes(
+    claimTypeCode?.toUpperCase()
+  );
+
+  if (isVendorWorkflow) {
+
+    const matrix = approvalMatrixId
+      ? await prisma.approvalMatrix.findUnique({
+          where: {
+            id: approvalMatrixId
+          },
+          select: {
+            id: true,
+            vendorEmail: true
+          }
+        })
+      : null;
+
+    if (!matrix?.vendorEmail) {
+
+      console.error(
+        `Approval routing: vendor email not configured for claim ${claim.id}. ` +
+        `ClaimType=${claimTypeCode}, MatrixId=${approvalMatrixId ?? 'NULL'}`
       );
+
       return;
     }
 
     try {
+
       await sendApprovalEmail({
-        to: approver.email,
-        approverName: approver.name,
-        claimantName: claimWithDocuments.creator?.name,
+        to: matrix.vendorEmail,
+        approverName: 'Vendor',
+        claimantName:
+          claimWithDocuments.creator?.name,
         claimId: claim.id,
         claimNumber: claim.claimNumber,
-        claimType: claimWithDocuments.claimType?.name,
-        amount: claimWithDocuments.amount,
-        documents: claimWithDocuments.documents || []
+        claimType:
+          claimWithDocuments.claimType?.name,
+        amount:
+          claimWithDocuments.amount,
+        documents:
+          claimWithDocuments.documents || []
       });
+
+      console.log(
+        `Vendor email sent successfully for claim ${claim.id} to ${matrix.vendorEmail}`
+      );
+
     } catch (err) {
+
       console.error(
-        `Approval routing: sendApprovalEmail FAILED for approver ${approver.id} on claim ${claim.id}:`,
+        `Approval routing: vendor email FAILED for claim ${claim.id}:`,
         err
       );
+
     }
+
+    return;
   }
 
-async initializeChain(claim, creatorId, resolvedMatrix = null) {
+  if (!approver) {
 
+    console.warn(
+      `Approval routing: no approver resolved for claim ${claim.id}. Nobody notified.`
+    );
+
+    return;
+  }
+
+  if (!approver.email) {
+
+    console.warn(
+      `Approval routing: approver ${approver.id} (${approver.name}) has no email configured. ` +
+      `Claim ${claim.id} assigned but email not sent.`
+    );
+
+    return;
+  }
+
+  try {
+
+    await sendApprovalEmail({
+      to: approver.email,
+      approverName: approver.name,
+      claimantName:
+        claimWithDocuments.creator?.name,
+      claimId: claim.id,
+      claimNumber: claim.claimNumber,
+      claimType:
+        claimWithDocuments.claimType?.name,
+      amount:
+        claimWithDocuments.amount,
+      documents:
+        claimWithDocuments.documents || []
+    });
+
+  } catch (err) {
+
+    console.error(
+      `Approval routing: sendApprovalEmail FAILED for approver ${approver.id} on claim ${claim.id}:`,
+      err
+    );
+
+  }
+}
+
+async initializeChain(claim, creatorId, resolvedMatrix = null) {
+const vendorWorkflowClaimTypes =
+  (process.env.VENDOR_WORKFLOW_CLAIM_TYPES || '')
+    .split(',')
+    .map(x => x.trim().toUpperCase())
+    .filter(Boolean);
   const creator = await prisma.user.findUnique({
     where: { id: creatorId }
   });
@@ -156,12 +248,58 @@ async initializeChain(claim, creatorId, resolvedMatrix = null) {
     amount: Number(claim.amount),
     ...(claim.formData || {})
   });
+if (!matrix) {
+  throw new AppError(
+    "No workflow found",
+    422
+  );
+}
+const isVendorWorkflow =
+  vendorWorkflowClaimTypes.includes(
+    claimType.code?.toUpperCase()
+  );
+
+
+  if (isVendorWorkflow) {
+
+claim = await prisma.claim.update({
+  where: { id: claim.id },
+  data: {
+    approvalMatrixId: matrix.id,
+    status: 'PENDING_APPROVAL',
+    currentApprovalSequence: null,
+    assignedApproverId: null,
+    requiredApproverRole: null,
+    systemStage: null
+  }
+});
+
+  const claimWithDocuments =
+    await prisma.claim.findUnique({
+      where: { id: claim.id },
+      include: {
+        documents: true,
+        claimType: true,
+        creator: true
+      }
+    });
+
+  await this.notifyApprover(
+    null,
+    claim,
+    claimWithDocuments
+  );
+
+  return {
+    claim
+  };
+}
 
   if (!matrix?.approvers?.length) {
     throw new AppError("No workflow found", 422);
   }
 
-  await prisma.claim.update({
+  claim = await prisma.claim.update({
     where: { id: claim.id },
     data: { approvalMatrixId: matrix.id }
   });
@@ -655,7 +793,6 @@ async reject(claim, actor, comments) {
 
   this.validateSoD(claim, actor);
 
-  // FIX: same matrix-pinning fix as advance() above.
   const matrix = claim.approvalMatrixId
     ? await prisma.approvalMatrix.findUnique({ where: { id: claim.approvalMatrixId } })
     : await prisma.approvalMatrix.findFirst({ where: { claimType: claim.claimType?.code } });

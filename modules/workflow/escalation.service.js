@@ -16,13 +16,11 @@ class EscalationService {
 
 
   async run() {
-    await this._handleMatrixApprovals();
-    await this._handleBypassStages();
+   // await this._handleMatrixApprovals();
+   // await this._handleBypassStages();
   }
 
-  // ============================================================
-  // Matrix-based (sequential ApprovalMatrix chain) claims
-  // ============================================================
+
   async _handleMatrixApprovals() {
 
     const approvals = await prisma.claimApproval.findMany({

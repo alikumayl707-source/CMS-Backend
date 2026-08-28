@@ -39,7 +39,6 @@ async findAll({
     status,
     claimTypeId,
     createdBy,
-    policyNumber,
     departmentId,
     page = 1,
     pageSize = 10,
@@ -53,19 +52,16 @@ const where = {
 
   ...(createdBy ? { createdBy } : {}),
   ...(departmentId ? { departmentId } : {}),
-  ...(policyNumber ? { policyNumber: { contains: policyNumber } } : {}),
 
  ...(search
   ? {
       OR: [
-        { claimNumber: { contains: search } },
-        { policyNumber: { contains: search } }
+        { claimNumber: { contains: search } }
       ]
     }
   : {})
 };
 
-// ... rest unchanged
  
 Object.entries(filters).forEach(([key, value]) => {
   if (value === undefined || value === null || value === '') return;
@@ -79,12 +75,7 @@ Object.entries(filters).forEach(([key, value]) => {
         }
       };
       break;
- 
-    case 'policyNumber':
-      where.policyNumber = {
-        contains: value
-      };
-      break;
+
  
     case 'claimNumber':
       where.claimNumber = {
@@ -210,7 +201,7 @@ async deleteDocument(documentId) {
     }
 
     async findPotentialDuplicates({
-        policyNumber,
+       
         claimTypeId,
         incidentDate,
         excludeId,
@@ -225,7 +216,6 @@ async deleteDocument(documentId) {
 
         return prisma.claim.findMany({
             where: {
-                policyNumber,
                 claimTypeId,
                 status: { not: "DRAFT" },
                 incidentDate: {

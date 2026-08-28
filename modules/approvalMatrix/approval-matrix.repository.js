@@ -127,6 +127,7 @@ class ApprovalMatrixRepository {
       departmentId,
       approvalPattern,
       rules = [],
+      vendorEmail,
       escalations = [],
       isActive,
       ...rest
@@ -152,6 +153,7 @@ class ApprovalMatrixRepository {
       const matrix = await tx.approvalMatrix.create({
         data: {
           ...rest,
+          vendorEmail,
           approvalPattern,
           departmentId: resolvedDepartmentId,
           isActive: isActive ?? true

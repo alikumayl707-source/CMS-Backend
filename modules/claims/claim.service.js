@@ -26,10 +26,10 @@ class ClaimService {
         return new Date(value).toISOString().slice(0, 10);
     }
 
-    computeDedupeHash({ policyNumber, claimTypeId, incidentDate }) {
+    computeDedupeHash({claimTypeId, incidentDate }) {
 
         const raw =
-            `${policyNumber}|${claimTypeId}|${this.dateOnly(incidentDate)}`;
+            `${claimTypeId}|${this.dateOnly(incidentDate)}`;
 
         return crypto
             .createHash("sha256")
@@ -68,13 +68,12 @@ class ClaimService {
     }
 
 async getAll(query) {
-  const { status, claimTypeId, createdBy, departmentId, policyNumber, search, page, pageSize, ...rest } = query;
+  const { status, claimTypeId, createdBy, departmentId, search, page, pageSize, ...rest } = query;
   return claimRepository.findAll({
     status, search,
     claimTypeId: claimTypeId ? Number(claimTypeId) : undefined,
     createdBy: createdBy ? Number(createdBy) : undefined,
     departmentId: departmentId ? Number(departmentId) : undefined,
-    policyNumber,
     page: page ? Number(page) : 1,
     pageSize: pageSize ? Number(pageSize) : 10,
     ...rest,
@@ -97,9 +96,9 @@ async getAll(query) {
     }
 
 
-    async checkDuplicate({ policyNumber, claimTypeId, incidentDate }, excludeId) {
+    async checkDuplicate({ claimTypeId, incidentDate }, excludeId) {
 
-        if (!policyNumber || !claimTypeId || !incidentDate) {
+        if ( !claimTypeId || !incidentDate) {
             return {
                 hasExactDuplicate: false,
                 hasSuspectedDuplicates: false,
@@ -108,7 +107,6 @@ async getAll(query) {
         }
 
         const dedupeHash = this.computeDedupeHash({
-            policyNumber,
             claimTypeId,
             incidentDate
         });
@@ -119,7 +117,7 @@ async getAll(query) {
         );
 
         const matches = await claimRepository.findPotentialDuplicates({
-            policyNumber,
+         
             claimTypeId: Number(claimTypeId),
             incidentDate,
             excludeId
@@ -159,7 +157,7 @@ async resubmitAfterRejection(userId, data) {
 }
 async getMyClaims(userId, query) {
 
-    const { status, claimTypeId, policyNumber, search, page, pageSize, ...rest } = query;
+    const { status, claimTypeId, search, page, pageSize, ...rest } = query;
 
 
     return claimRepository.findAll({
@@ -167,7 +165,6 @@ async getMyClaims(userId, query) {
         search,
         claimTypeId: claimTypeId ? Number(claimTypeId) : undefined,
         createdBy: Number(userId),
-        policyNumber,
         page: page ? Number(page) : 1,
         pageSize: pageSize ? Number(pageSize) : 10,
         ...rest,
@@ -191,7 +188,7 @@ async saveDraft(userId, data) {
 
     const payload = {
         claimTypeId: claimType.id,
-        policyNumber: data?.policyNumber ?? '',
+        
         customerId: data.customerId || null,
         incidentDate: data.incidentDate ? new Date(data.incidentDate) : null,
         formData: data.formData ?? {},
@@ -278,7 +275,7 @@ async submit(userId, data) {
     }
 
     const duplicateCheck = await this.checkDuplicate({
-        policyNumber: existing.policyNumber,
+       
         claimTypeId: claimType.id,
         incidentDate: existing.incidentDate
     }, existingId);
@@ -291,7 +288,6 @@ async submit(userId, data) {
     }
 
     const dedupeHash = this.computeDedupeHash({
-        policyNumber: existing.policyNumber,
         claimTypeId: claimType.id,
         incidentDate: existing.incidentDate
     });

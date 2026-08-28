@@ -165,7 +165,7 @@ model Claim {
   id Int @id @default(autoincrement())
 
   claimNumber  String?   @unique
-  policyNumber String?
+  
   customerId   Int?
   incidentDate DateTime?
   formData     Json?
@@ -234,7 +234,7 @@ model ApprovalMatrix {
   isActive Boolean @default(true)
 
   claimType String
-
+  vendorEmail String?
   departmentId Int?
 
   department Department? @relation(fields: [departmentId], references: [id])

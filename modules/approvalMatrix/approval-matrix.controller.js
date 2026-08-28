@@ -73,7 +73,11 @@ result.data = result.data.map(item => ({
 
 async create(req, res, next) {
   try {
-
+const vendorWorkflowClaimTypes =
+  (process.env.VENDOR_WORKFLOW_CLAIM_TYPES || '')
+    .split(',')
+    .map(x => x.trim().toUpperCase())
+    .filter(Boolean);
     const {
       claimType,
       departmentId,
@@ -82,6 +86,7 @@ async create(req, res, next) {
       approverUserIds,
       approvalPattern,
       rules,
+      vendorEmail,
       escalations,
       isActive,
       approvalCommentRequired,
@@ -109,8 +114,17 @@ const claimTypeRecord =
     }
   });
 
+const isVendorWorkflow =
+  vendorWorkflowClaimTypes.includes(
+    claimType?.toUpperCase()
+  );
+
+
+  
+
 const requiresApprovalChain =
-  !claimTypeRecord?.bypassApprovalChain;
+  !claimTypeRecord?.bypassApprovalChain &&
+  !isVendorWorkflow;
 
 if (
   requiresApprovalChain &&
@@ -152,8 +166,11 @@ if (
         maxAmount:
           Number(maxAmount),
 
-        approverUserIds:
-          approverUserIds.map(Number),
+       approverUserIds:
+  Array.isArray(approverUserIds)
+    ? approverUserIds.map(Number)
+    : [],
+        vendorEmail,
 
         approvalPattern,
 
