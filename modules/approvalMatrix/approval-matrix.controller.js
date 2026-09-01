@@ -73,17 +73,17 @@ result.data = result.data.map(item => ({
 
 async create(req, res, next) {
   try {
-const vendorWorkflowClaimTypes =
-  (process.env.VENDOR_WORKFLOW_CLAIM_TYPES || '')
-    .split(',')
-    .map(x => x.trim().toUpperCase())
-    .filter(Boolean);
+    const vendorWorkflowClaimTypes =
+      (process.env.VENDOR_WORKFLOW_CLAIM_TYPES || '')
+        .split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+
     const {
       claimType,
       departmentId,
+      departmentMappings,      
       minAmount,
       maxAmount,
-      approverUserIds,
+      approverUserIds,         
       approvalPattern,
       rules,
       vendorEmail,
@@ -93,110 +93,58 @@ const vendorWorkflowClaimTypes =
       rejectionCommentRequired
     } = req.body;
 
-    if (
-      !claimType ||
-      minAmount == null ||
-      maxAmount == null
-    ) {
+    if (!claimType || minAmount == null || maxAmount == null) {
       return res.status(400).json({
         success: false,
-        message:
-          "claimType, minAmount, maxAmount are required"
+        message: "claimType, minAmount, maxAmount are required"
       });
     }
 
+    const claimTypeRecord = await prisma.claimType.findUnique({ where: { code: claimType } });
+    const isVendorWorkflow = vendorWorkflowClaimTypes.includes(claimType?.toUpperCase());
+    const requiresApprovalChain = !claimTypeRecord?.bypassApprovalChain && !isVendorWorkflow;
 
 
-const claimTypeRecord =
-  await prisma.claimType.findUnique({
-    where: {
-      code: claimType
-    }
-  });
+    const normalizedDepartmentMappings = Array.isArray(departmentMappings)
+      ? departmentMappings
+          .filter(dm => dm && dm.departmentId != null &&
+                        Array.isArray(dm.approverUserIds) && dm.approverUserIds.length > 0)
+          .map(dm => ({
+            departmentId: Number(dm.departmentId),
+            approverUserIds: dm.approverUserIds.map(Number)
+          }))
+      : [];
 
-const isVendorWorkflow =
-  vendorWorkflowClaimTypes.includes(
-    claimType?.toUpperCase()
-  );
+    const hasLegacyApprovers = Array.isArray(approverUserIds) && approverUserIds.length > 0;
 
-
-  
-
-const requiresApprovalChain =
-  !claimTypeRecord?.bypassApprovalChain &&
-  !isVendorWorkflow;
-
-if (
-  requiresApprovalChain &&
-  (
-    !Array.isArray(approverUserIds) ||
-    approverUserIds.length === 0
-  )
-) {
-  return res.status(400).json({
-    success: false,
-    message:
-      "At least one approver is required"
-  });
-}
-
-    if (
-      Number(maxAmount) <=
-      Number(minAmount)
-    ) {
+    if (requiresApprovalChain && normalizedDepartmentMappings.length === 0 && !hasLegacyApprovers) {
       return res.status(400).json({
         success: false,
-        message:
-          "maxAmount must exceed minAmount"
+        message: "At least one department with one approver is required"
       });
     }
 
-    const data =
-      await service.create({
-        claimType,
+    if (Number(maxAmount) <= Number(minAmount)) {
+      return res.status(400).json({ success: false, message: "maxAmount must exceed minAmount" });
+    }
 
-        departmentId:
-          departmentId
-            ? Number(departmentId)
-            : null,
-
-        minAmount:
-          Number(minAmount),
-
-        maxAmount:
-          Number(maxAmount),
-
-       approverUserIds:
-  Array.isArray(approverUserIds)
-    ? approverUserIds.map(Number)
-    : [],
-        vendorEmail,
-
-        approvalPattern,
-
-        rules:
-          rules || [],
-
-        escalations:
-          escalations || [],
-
-        isActive:
-          isActive ?? true,
-
-        approvalCommentRequired:
-          approvalCommentRequired ??
-          false,
-
-        rejectionCommentRequired:
-          rejectionCommentRequired ??
-          true
-      });
-
-    return res.status(201).json({
-      success: true,
-      data
+    const data = await service.create({
+      claimType,
+      departmentId: departmentId ? Number(departmentId) : null,
+      departmentMappings: normalizedDepartmentMappings, 
+      minAmount: Number(minAmount),
+      maxAmount: Number(maxAmount),
+      approverUserIds: hasLegacyApprovers ? approverUserIds.map(Number) : [],
+      vendorEmail,
+      approvalPattern,
+      rules: rules || [],
+      escalations: escalations || [],
+      isActive: isActive ?? true,
+      approvalCommentRequired: approvalCommentRequired ?? false,
+      rejectionCommentRequired: rejectionCommentRequired ?? true
     });
 
+    return res.status(201).json({ success: true, data });
   } catch (err) {
     next(err);
   }

@@ -458,7 +458,6 @@ async advance(claim, actor, comments, lineItemDecisions) {
 
   this.validateSoD(claim, actor);
 
-  await this.validateDepartmentalHead(claim, actor);
  if (lineItemDecisions?.fieldName && claim.formData?.[lineItemDecisions.fieldName]) {
 
     const fieldName = lineItemDecisions.fieldName;
@@ -524,7 +523,9 @@ async advance(claim, actor, comments, lineItemDecisions) {
       403
     );
   }
-
+if (currentStep.roleId) {           // NEW — gate on role-based steps only
+  await this.validateDepartmentalHead(claim, actor);
+}
   this.validateActorCanActOnStep(currentStep, actor, Number(claim.amount));
 
 
@@ -808,24 +809,20 @@ async reject(claim, actor, comments) {
   } else if (claim.systemStage === "FINANCE") {
     await this.validateActorIsSystemDeptHead(claim, actor, false);
   } else {
+  currentStep = await prisma.claimApproval.findUnique({
+    where: { claimId_sequence: { claimId: claim.id, sequence: claim.currentApprovalSequence } }
+  });
 
-    currentStep = await prisma.claimApproval.findUnique({
-      where: {
-        claimId_sequence: {
-          claimId: claim.id,
-          sequence: claim.currentApprovalSequence
-        }
-      }
-    });
+  if (!currentStep) {
+    throw new AppError(`No approval chain found for claim ${claim.id} at sequence ${claim.currentApprovalSequence}`, 500);
+  }
 
-    if (!currentStep) {
-      throw new AppError(
-        `No approval chain found for claim ${claim.id} at sequence ${claim.currentApprovalSequence}`,
-        500
-      );
-    }
+  if (currentStep.roleId) {   
+    await this.validateDepartmentalHead(claim, actor);
+  }
 
-    this.validateActorCanActOnStep(currentStep, actor, claim.amount);
+  this.validateActorCanActOnStep(currentStep, actor, claim.amount);
+ 
 
     await prisma.claimApproval.update({
       where: { id: currentStep.id },

@@ -79,16 +79,14 @@ class ApprovalMatrixRepository {
     };
   }
 
- async create(data) {
+async create(data) {
 
   const resolvedDepartmentId =
     data.departmentId !== undefined && data.departmentId !== null
-      ? Number(data.departmentId)
-      : null;
+      ? Number(data.departmentId) : null;
 
   const minAmount = Number(data.minAmount);
   const maxAmount = Number(data.maxAmount);
-
 
   const overlapping = await prisma.approvalMatrix.findFirst({
     where: {
@@ -108,122 +106,106 @@ class ApprovalMatrixRepository {
 
 
 
-    const existingWorkflow = await prisma.approvalMatrix.findFirst({
-      where: {
-        claimType: data.claimType,
-        departmentId: resolvedDepartmentId
-      }
+  const {
+    approverUserIds,
+    approvers,
+    departmentMappings = [], 
+    departmentId,             
+    approvalPattern,
+    rules = [],
+    vendorEmail,
+    escalations = [],
+    isActive,
+    ...rest
+  } = data;
+
+  const allSpecificApproverIds = [
+    ...(Array.isArray(approverUserIds) ? approverUserIds : []),
+    ...departmentMappings.flatMap(dm => dm.approverUserIds || [])
+  ];
+
+  if (allSpecificApproverIds.length > 0) {
+    const uniqueIds = [...new Set(allSpecificApproverIds)];
+    const users = await prisma.user.findMany({
+      where: { id: { in: uniqueIds }, orgSyncedAt: { not: null } },
+      select: { id: true }
     });
-
-    if (existingWorkflow) {
-      throw new Error(
-        `Approval workflow already exists for claim type ${data.claimType} and department ${resolvedDepartmentId}`
-      );
+    if (users.length !== uniqueIds.length) {
+      throw new Error("All approvers must be Entra synced users");
     }
-
-    const {
-      approverUserIds,
-      approvers,
-      departmentId,
-      approvalPattern,
-      rules = [],
-      vendorEmail,
-      escalations = [],
-      isActive,
-      ...rest
-    } = data;
-
-    if (Array.isArray(approverUserIds) && approverUserIds.length > 0) {
-
-      const users = await prisma.user.findMany({
-        where: {
-          id: { in: approverUserIds },
-          orgSyncedAt: { not: null }
-        },
-        select: { id: true }
-      });
-
-      if (users.length !== approverUserIds.length) {
-        throw new Error("All approvers must be Entra synced users");
-      }
-    }
-
-    return prisma.$transaction(async (tx) => {
-
-      const matrix = await tx.approvalMatrix.create({
-        data: {
-          ...rest,
-          vendorEmail,
-          approvalPattern,
-          departmentId: resolvedDepartmentId,
-          isActive: isActive ?? true
-        }
-      });
-
-      if (Array.isArray(approverUserIds) && approverUserIds.length > 0) {
-
-        await tx.approvalMatrixApprover.createMany({
-          data: approverUserIds.map((userId, idx) => ({
-            approvalMatrixId: matrix.id,
-            specificUserId: userId,
-            sequence: approvalPattern === "PARALLEL" ? 1 : idx + 1,
-            isParallel: approvalPattern === "PARALLEL",
-            groupKey: approvalPattern === "PARALLEL" ? "GROUP1" : null
-          }))
-        });
-
-      } else if (Array.isArray(approvers) && approvers.length) {
-
-        await tx.approvalMatrixApprover.createMany({
-          data: approvers.map((roleId, idx) => ({
-            approvalMatrixId: matrix.id,
-            roleId,
-            sequence: idx + 1
-          }))
-        });
-      }
-
-      if (rules.length) {
-        await tx.workflowRule.createMany({
-          data: rules.map(rule => ({
-            approvalMatrixId: matrix.id,
-            field: rule.field,
-            operator: rule.operator,
-            value: String(rule.value),
-            conditionGroup: rule.conditionGroup ?? null,
-            approverRole: rule.approverRole ?? null,
-            approverUserId: rule.approverUserId ?? null
-          }))
-        });
-      }
-
-      if (escalations.length) {
-        await tx.workflowEscalation.createMany({
-          data: escalations.map(e => ({
-            approvalMatrixId: matrix.id,
-            afterHours: Number(e.afterHours),
-            action: e.action,
-            targetDesignationId: Number(e.targetDesignationId)
-          }))
-        });
-      }
-
-      return tx.approvalMatrix.findUnique({
-        where: { id: matrix.id },
-        include: {
-          rules: true,
-          escalations: true,
-          approvers: {
-            orderBy: { sequence: "asc" },
-            include: {
-              role: true,
-              specificUser: { include: { designation: true } }
-            }
-          }
-        }
-      });
-    });
   }
+
+  return prisma.$transaction(async (tx) => {
+
+    const matrix = await tx.approvalMatrix.create({
+      data: { ...rest, vendorEmail, approvalPattern, departmentId: resolvedDepartmentId, isActive: isActive ?? true }
+    });
+
+    if (departmentMappings.length > 0) {
+      
+      let sequence = 1;
+      const approverRows = [];
+      for (const mapping of departmentMappings) {
+        for (const userId of mapping.approverUserIds) {
+          approverRows.push({
+            approvalMatrixId: matrix.id,
+            departmentId: mapping.departmentId,
+            specificUserId: userId,
+            sequence: sequence++,
+            isParallel: false,
+            groupKey: null
+          });
+        }
+      }
+      await tx.approvalMatrixApprover.createMany({ data: approverRows });
+
+    } else if (Array.isArray(approverUserIds) && approverUserIds.length > 0) {
+      await tx.approvalMatrixApprover.createMany({
+        data: approverUserIds.map((userId, idx) => ({
+          approvalMatrixId: matrix.id,
+          specificUserId: userId,
+          sequence: approvalPattern === "PARALLEL" ? 1 : idx + 1,
+          isParallel: approvalPattern === "PARALLEL",
+          groupKey: approvalPattern === "PARALLEL" ? "GROUP1" : null
+        }))
+      });
+
+    } else if (Array.isArray(approvers) && approvers.length) {
+      await tx.approvalMatrixApprover.createMany({
+        data: approvers.map((roleId, idx) => ({ approvalMatrixId: matrix.id, roleId, sequence: idx + 1 }))
+      });
+    }
+
+    if (rules.length) {
+      await tx.workflowRule.createMany({
+        data: rules.map(rule => ({
+          approvalMatrixId: matrix.id, field: rule.field, operator: rule.operator, value: String(rule.value),
+          conditionGroup: rule.conditionGroup ?? null, approverRole: rule.approverRole ?? null, approverUserId: rule.approverUserId ?? null
+        }))
+      });
+    }
+
+    if (escalations.length) {
+      await tx.workflowEscalation.createMany({
+        data: escalations.map(e => ({
+          approvalMatrixId: matrix.id, afterHours: Number(e.afterHours), action: e.action, targetDesignationId: Number(e.targetDesignationId)
+        }))
+      });
+    }
+
+    return tx.approvalMatrix.findUnique({
+      where: { id: matrix.id },
+      include: {
+        rules: true,
+        escalations: true,
+        approvers: {
+          orderBy: { sequence: "asc" },
+          include: { role: true, department: true, specificUser: { include: { designation: true } } }
+        }
+      }
+    });
+  });
+}
 
   async getMatchingWorkflow(claimType, departmentId, amount) {
 

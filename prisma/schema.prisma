@@ -155,10 +155,11 @@ model Department {
 
   isHRDept      Boolean @default(false)
   isFinanceDept Boolean @default(false)
-
+  approvalMatrixApprovers ApprovalMatrixApprover[]
   users            User[]
   claims           Claim[]
   approvalMatrices ApprovalMatrix[]
+
 }
 
 model Claim {
@@ -300,16 +301,21 @@ model WorkflowEscalation {
 model ApprovalMatrixApprover {
   id               Int            @id @default(autoincrement())
   approvalMatrixId Int
+  departmentId     Int?                                                     // NEW
   roleId           Int? 
   specificUserId   Int? 
   sequence         Int
   approvalMatrix   ApprovalMatrix @relation(fields: [approvalMatrixId], references: [id], onDelete: Cascade)
   role             Role?          @relation(fields: [roleId], references: [id])
   specificUser     User?          @relation("ApprovalMatrixSpecificUser", fields: [specificUserId], references: [id])
+  department       Department?    @relation(fields: [departmentId], references: [id])  // NEW
   isParallel Boolean @default(false)
   groupKey String?
   @@index([approvalMatrixId, sequence])
+  @@index([departmentId])                                                              // NEW
 }
+
+
 enum WorkflowStatus {
   DRAFT
   ACTIVE
