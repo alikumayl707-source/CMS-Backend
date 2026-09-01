@@ -6,7 +6,6 @@ class PermissionService {
     }
 
     async getAll() {
-        console.log("SERVICE HIT");
         return PermissionModel.findAll();
     }
 

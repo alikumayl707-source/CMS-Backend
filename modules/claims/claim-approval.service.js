@@ -523,7 +523,7 @@ async advance(claim, actor, comments, lineItemDecisions) {
       403
     );
   }
-if (currentStep.roleId) {           // NEW — gate on role-based steps only
+if (currentStep.roleId) {     
   await this.validateDepartmentalHead(claim, actor);
 }
   this.validateActorCanActOnStep(currentStep, actor, Number(claim.amount));
@@ -624,7 +624,7 @@ if (currentStep.roleId) {           // NEW — gate on role-based steps only
       const updatedClaim = await tx.claim.update({
         where: { id: claim.id },
         data: {
-          status: "PENDING_APPROVAL",
+          status: "PARTIALLY_APPROVED",
           currentApprovalSequence: nextStep.sequence,
           assignedApproverId: eligibleId,
           requiredApproverRole: nextRequiredRole
@@ -646,6 +646,7 @@ if (currentStep.roleId) {           // NEW — gate on role-based steps only
     const updatedClaim = await tx.claim.update({
       where: { id: claim.id },
       data: {
+        status: "PENDING_APPROVAL",
         systemStage: "FINANCE",
         currentApprovalSequence: null,
         requiredApproverRole: "FINANCE",
@@ -678,23 +679,23 @@ if (currentStep.roleId) {           // NEW — gate on role-based steps only
     await this.notifyApprover(approver, claim, claimWithDocuments);
   }
 
-  if (result.notifyInfo?.type === "finance") {
+  // if (result.notifyInfo?.type === "finance") {
 
-    const financeApprover = result.notifyInfo.financeApprover;
+  //   const financeApprover = result.notifyInfo.financeApprover;
 
-    await notificationService.notifyUser(
-      financeApprover.id,
-      "Finance Approval Required",
-      `Claim ${claim.claimNumber || claim.id} requires finance approval`
-    );
+  //   await notificationService.notifyUser(
+  //     financeApprover.id,
+  //     "Finance Approval Required",
+  //     `Claim ${claim.claimNumber || claim.id} requires finance approval`
+  //   );
 
-    const claimWithDocuments = await prisma.claim.findUnique({
-      where: { id: claim.id },
-      include: { documents: true, claimType: true, creator: true }
-    });
+  //   const claimWithDocuments = await prisma.claim.findUnique({
+  //     where: { id: claim.id },
+  //     include: { documents: true, claimType: true, creator: true }
+  //   });
 
-    await this.notifyApprover(financeApprover, claim, claimWithDocuments);
-  }
+  //   await this.notifyApprover(financeApprover, claim, claimWithDocuments);
+  // }
 
   return result.updatedClaim;
 }

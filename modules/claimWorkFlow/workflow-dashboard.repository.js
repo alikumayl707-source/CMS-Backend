@@ -16,7 +16,7 @@ class WorkflowDashboardRepository {
         include: {
           department: true,
           approvers: {
-            include: { role: true, specificUser: true },
+            include: { role: true, specificUser: true, department: true },
             orderBy: { sequence: 'asc' }
           }
         },
@@ -46,11 +46,13 @@ class WorkflowDashboardRepository {
 
           approvalChain: workflow.approvers.map(x => ({
             sequence: x.sequence,
+            department: x.department?.name || null,
             approver: x.role?.name || x.specificUser?.name || 'N/A'
           })),
 
           statistics: {
             pending: stats.find(x => x.status === 'PENDING_APPROVAL')?._count.id || 0,
+            partiallyApproved: stats.find(x => x.status === 'PARTIALLY_APPROVED')?._count.id || 0,
             approved: stats.find(x => x.status === 'APPROVED')?._count.id || 0,
             rejected: stats.find(x => x.status === 'REJECTED')?._count.id || 0,
             returned: stats.find(x => x.status === 'RETURNED')?._count.id || 0
