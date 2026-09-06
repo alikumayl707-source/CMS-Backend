@@ -188,8 +188,6 @@ async saveDraft(userId, data) {
 
     const payload = {
         claimTypeId: claimType.id,
-        
-        customerId: data.customerId || null,
         incidentDate: data.incidentDate ? new Date(data.incidentDate) : null,
         formData: data.formData ?? {},
         amount: resolvedAmount,
@@ -310,10 +308,10 @@ async submit(userId, data) {
         });
 
         if (!resolvedWorkflow) {
-throw new AppError(
-  "Approval process is missing. Please configure approvers for this claim.",
-  422
-);
+            throw new AppError(
+            "Approval process is missing. Please configure approvers for this claim.",
+            422
+        );
 
         }
     }

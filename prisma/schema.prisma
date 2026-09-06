@@ -167,7 +167,6 @@ model Claim {
 
   claimNumber  String?   @unique
   
-  customerId   Int?
   incidentDate DateTime?
   formData     Json?
   amount       Decimal

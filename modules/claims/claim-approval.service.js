@@ -183,11 +183,12 @@ const isVendorWorkflow =
 }
 
 async initializeChain(claim, creatorId, resolvedMatrix = null) {
-const vendorWorkflowClaimTypes =
-  (process.env.VENDOR_WORKFLOW_CLAIM_TYPES || '')
-    .split(',')
-    .map(x => x.trim().toUpperCase())
-    .filter(Boolean);
+  const vendorWorkflowClaimTypes =
+    (process.env.VENDOR_WORKFLOW_CLAIM_TYPES || '')
+      .split(',')
+      .map(x => x.trim().toUpperCase())
+      .filter(Boolean);
+
   const creator = await prisma.user.findUnique({
     where: { id: creatorId }
   });
@@ -202,6 +203,47 @@ const vendorWorkflowClaimTypes =
 
   if (!claimType) {
     throw new AppError("Claim type not found", 404);
+  }
+
+  const isVendorWorkflow = vendorWorkflowClaimTypes.includes(
+    claimType.code?.toUpperCase()
+  );
+
+  if (isVendorWorkflow) {
+
+    const claimDepartmentId = await this.resolveClaimDepartmentId(claim);
+
+    const matrix = resolvedMatrix ?? await approvalMatrixService.determineWorkflow({
+      claimType: claimType.code,
+      departmentId: claimDepartmentId,
+      amount: Number(claim.amount),
+      ...(claim.formData || {})
+    });
+
+    if (!matrix) {
+      throw new AppError("No workflow found", 422);
+    }
+
+    claim = await prisma.claim.update({
+      where: { id: claim.id },
+      data: {
+        approvalMatrixId: matrix.id,
+        status: 'PENDING_APPROVAL',
+        currentApprovalSequence: null,
+        assignedApproverId: null,
+        requiredApproverRole: null,
+        systemStage: null
+      }
+    });
+
+    const claimWithDocuments = await prisma.claim.findUnique({
+      where: { id: claim.id },
+      include: { documents: true, claimType: true, creator: true }
+    });
+
+    await this.notifyApprover(null, claim, claimWithDocuments);
+
+    return { claim };
   }
 
   if (claimType.bypassApprovalChain) {
@@ -241,59 +283,16 @@ const vendorWorkflowClaimTypes =
 
   const claimDepartmentId = await this.resolveClaimDepartmentId(claim);
 
-
   const matrix = resolvedMatrix ?? await approvalMatrixService.determineWorkflow({
     claimType: claimType.code,
     departmentId: claimDepartmentId,
     amount: Number(claim.amount),
     ...(claim.formData || {})
   });
-if (!matrix) {
-  throw new AppError(
-    "No workflow found",
-    422
-  );
-}
-const isVendorWorkflow =
-  vendorWorkflowClaimTypes.includes(
-    claimType.code?.toUpperCase()
-  );
 
-
-  if (isVendorWorkflow) {
-
-claim = await prisma.claim.update({
-  where: { id: claim.id },
-  data: {
-    approvalMatrixId: matrix.id,
-    status: 'PENDING_APPROVAL',
-    currentApprovalSequence: null,
-    assignedApproverId: null,
-    requiredApproverRole: null,
-    systemStage: null
+  if (!matrix) {
+    throw new AppError("No workflow found", 422);
   }
-});
-
-  const claimWithDocuments =
-    await prisma.claim.findUnique({
-      where: { id: claim.id },
-      include: {
-        documents: true,
-        claimType: true,
-        creator: true
-      }
-    });
-
-  await this.notifyApprover(
-    null,
-    claim,
-    claimWithDocuments
-  );
-
-  return {
-    claim
-  };
-}
 
   if (!matrix?.approvers?.length) {
     throw new AppError("No workflow found", 422);
@@ -634,27 +633,19 @@ if (currentStep.roleId) {
       return { updatedClaim, notifyInfo: { type: "next", eligibleId } };
     }
 
-    const financeApprover = await this.findSystemDeptHead(false);
-
-    if (!financeApprover) {
-      throw new AppError(
-        "Finance approver not configured — claim cannot advance to Finance stage",
-        500
-      );
-    }
-
     const updatedClaim = await tx.claim.update({
       where: { id: claim.id },
       data: {
-        status: "PENDING_APPROVAL",
-        systemStage: "FINANCE",
+        status: "APPROVED",
+        approvedBy: actor.id,
         currentApprovalSequence: null,
-        requiredApproverRole: "FINANCE",
-        assignedApproverId: financeApprover?.id ?? null
+        assignedApproverId: null,
+        requiredApproverRole: null,
+        systemStage: "DONE"
       }
     });
 
-    return { updatedClaim, notifyInfo: { type: "finance", financeApprover } };
+    return { updatedClaim, notifyInfo: null };
   });
 
 
@@ -678,24 +669,6 @@ if (currentStep.roleId) {
 
     await this.notifyApprover(approver, claim, claimWithDocuments);
   }
-
-  // if (result.notifyInfo?.type === "finance") {
-
-  //   const financeApprover = result.notifyInfo.financeApprover;
-
-  //   await notificationService.notifyUser(
-  //     financeApprover.id,
-  //     "Finance Approval Required",
-  //     `Claim ${claim.claimNumber || claim.id} requires finance approval`
-  //   );
-
-  //   const claimWithDocuments = await prisma.claim.findUnique({
-  //     where: { id: claim.id },
-  //     include: { documents: true, claimType: true, creator: true }
-  //   });
-
-  //   await this.notifyApprover(financeApprover, claim, claimWithDocuments);
-  // }
 
   return result.updatedClaim;
 }
