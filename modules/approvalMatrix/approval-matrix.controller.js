@@ -89,6 +89,7 @@ async create(req, res, next) {
       vendorEmail,
       escalations,
       isActive,
+      status, 
       approvalCommentRequired,
       rejectionCommentRequired
     } = req.body;
@@ -140,6 +141,7 @@ async create(req, res, next) {
       rules: rules || [],
       escalations: escalations || [],
       isActive: isActive ?? true,
+      status: status || "ACTIVE",
       approvalCommentRequired: approvalCommentRequired ?? false,
       rejectionCommentRequired: rejectionCommentRequired ?? true
     });

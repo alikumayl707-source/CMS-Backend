@@ -4,12 +4,10 @@ const prisma = new PrismaClient();
 class WorkflowDashboardRepository {
 
   async getDashboard(page = 1, pageSize = 5) {
-
     const skip = (page - 1) * pageSize;
 
     const [totalRecords, workflows] = await Promise.all([
       prisma.approvalMatrix.count(),
-
       prisma.approvalMatrix.findMany({
         skip,
         take: pageSize,
@@ -24,42 +22,52 @@ class WorkflowDashboardRepository {
       })
     ]);
 
-    const data = await Promise.all(
-      workflows.map(async (workflow) => {
+    // FIX: N+1 query hata kar ek hi groupBy call kiya, sab workflow IDs ke liye
+    const workflowIds = workflows.map(w => w.id);
 
-        const stats = await prisma.claim.groupBy({
-  by: ['status'],
-  where: {
-    approvalMatrixId: workflow.id
-  },
-  _count: {
-    id: true
-  }
-});
-        return {
-          workflowId: workflow.id,
-          workflowName: workflow.workflowName,
-          claimType: workflow.claimType,
-          department: workflow.department?.name,
-          status: workflow.status,
-          approvalPattern: workflow.approvalPattern,
+    const allStats = workflowIds.length > 0
+      ? await prisma.claim.groupBy({
+          by: ['approvalMatrixId', 'status'],
+          where: { approvalMatrixId: { in: workflowIds } },
+          _count: { id: true }
+        })
+      : [];
 
-          approvalChain: workflow.approvers.map(x => ({
-            sequence: x.sequence,
-            department: x.department?.name || null,
-            approver: x.role?.name || x.specificUser?.name || 'N/A'
-          })),
+    // Stats ko workflowId ke hisaab se group kar liya, fast lookup ke liye
+    const statsByWorkflow = new Map();
+    for (const row of allStats) {
+      if (!statsByWorkflow.has(row.approvalMatrixId)) {
+        statsByWorkflow.set(row.approvalMatrixId, {});
+      }
+      statsByWorkflow.get(row.approvalMatrixId)[row.status] = row._count.id;
+    }
 
-          statistics: {
-            pending: stats.find(x => x.status === 'PENDING_APPROVAL')?._count.id || 0,
-            partiallyApproved: stats.find(x => x.status === 'PARTIALLY_APPROVED')?._count.id || 0,
-            approved: stats.find(x => x.status === 'APPROVED')?._count.id || 0,
-            rejected: stats.find(x => x.status === 'REJECTED')?._count.id || 0,
-            returned: stats.find(x => x.status === 'RETURNED')?._count.id || 0
-          }
-        };
-      })
-    );
+    const data = workflows.map((workflow) => {
+      const stats = statsByWorkflow.get(workflow.id) || {};
+
+      return {
+        workflowId: workflow.id,
+        workflowName: workflow.workflowName,
+        claimType: workflow.claimType,
+        department: workflow.department?.name,
+        status: workflow.status,
+        approvalPattern: workflow.approvalPattern,
+
+        approvalChain: workflow.approvers.map(x => ({
+          sequence: x.sequence,
+          department: x.department?.name || null,
+          approver: x.role?.name || x.specificUser?.name || 'N/A'
+        })),
+
+        statistics: {
+          pending: stats['PENDING_APPROVAL'] || 0,
+          partiallyApproved: stats['PARTIALLY_APPROVED'] || 0,
+          approved: stats['APPROVED'] || 0,
+          rejected: stats['REJECTED'] || 0,
+          returned: stats['RETURNED'] || 0
+        }
+      };
+    });
 
     return {
       data,
@@ -90,7 +98,6 @@ class WorkflowDashboardRepository {
   }
 
   async getWorkflowClaims(workflowId) {
-
     const workflow = await prisma.approvalMatrix.findUnique({
       where: { id: workflowId }
     });
@@ -99,27 +106,17 @@ class WorkflowDashboardRepository {
       return [];
     }
 
-return prisma.claim.findMany({
-  where: {
-    approvalMatrixId: workflow.id
-  },
-  include: {
-    assignedApprover: {
-      select: {
-        id: true,
-        name: true
-      }
-    },
-    claimType: true
-  },
-  orderBy: {
-    createdAt: "desc"
-  }
-});
+    return prisma.claim.findMany({
+      where: { approvalMatrixId: workflow.id },
+      include: {
+        assignedApprover: { select: { id: true, name: true } },
+        claimType: true
+      },
+      orderBy: { createdAt: "desc" }
+    });
   }
 
   async getClaimWorkflow(claimId) {
-
     const claim = await prisma.claim.findUnique({
       where: { id: claimId },
       include: {

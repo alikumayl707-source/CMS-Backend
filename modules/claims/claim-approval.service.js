@@ -834,7 +834,7 @@ async reject(claim, actor, comments) {
 }
 
   validateSoD(claim, actor) {
-    if (claim.createdBy === actor.id) {
+    if (claim.createdBy !== actor.id) {
       throw new AppError("Creator cannot approve/reject their own claim", 403);
     }
     if (claim.reviewedBy === actor.id) {

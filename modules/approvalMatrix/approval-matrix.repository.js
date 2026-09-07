@@ -12,14 +12,11 @@ class ApprovalMatrixRepository {
     workflowName,
     status
   }) {
-
     page = Number(page);
     pageSize = Number(pageSize);
-
     const skip = (page - 1) * pageSize;
 
     const where = {
-
       ...(search
         ? {
             OR: [
@@ -28,21 +25,13 @@ class ApprovalMatrixRepository {
             ]
           }
         : {}),
-
       ...(claimType ? { claimType } : {}),
-
       ...(departmentId ? { departmentId: Number(departmentId) } : {}),
-
-      ...(workflowName
-        ? { workflowName: { contains: workflowName } }
-        : {}),
-
+      ...(workflowName ? { workflowName: { contains: workflowName } } : {}),
       ...(status ? { status } : {})
-
     };
 
     const [data, total] = await prisma.$transaction([
-
       prisma.approvalMatrix.findMany({
         where,
         skip,
@@ -56,16 +45,12 @@ class ApprovalMatrixRepository {
             orderBy: { sequence: "asc" },
             include: {
               role: true,
-              specificUser: {
-                include: { designation: true }
-              }
+              specificUser: { include: { designation: true } }
             }
           }
         }
       }),
-
       prisma.approvalMatrix.count({ where })
-
     ]);
 
     return {
@@ -79,160 +64,169 @@ class ApprovalMatrixRepository {
     };
   }
 
-async create(data) {
+  async create(data) {
+    const resolvedDepartmentId =
+      data.departmentId !== undefined && data.departmentId !== null
+        ? Number(data.departmentId) : null;
 
-  const resolvedDepartmentId =
-    data.departmentId !== undefined && data.departmentId !== null
-      ? Number(data.departmentId) : null;
+    const minAmount = Number(data.minAmount);
+    const maxAmount = Number(data.maxAmount);
 
-  const minAmount = Number(data.minAmount);
-  const maxAmount = Number(data.maxAmount);
-
-  const overlapping = await prisma.approvalMatrix.findFirst({
-    where: {
-      claimType: data.claimType,
-      departmentId: resolvedDepartmentId,
-      minAmount: { lt: maxAmount },
-      maxAmount: { gt: minAmount }
-    }
-  });
-
-  if (overlapping) {
-    throw new Error(
-      `An overlapping approval workflow already exists for claim type ${data.claimType}, ` +
-      `department ${resolvedDepartmentId}, range ${overlapping.minAmount}-${overlapping.maxAmount}`
-    );
-  }
-
-
-
-  const {
-    approverUserIds,
-    approvers,
-    departmentMappings = [], 
-    departmentId,             
-    approvalPattern,
-    rules = [],
-    vendorEmail,
-    escalations = [],
-    isActive,
-    ...rest
-  } = data;
-
-  const allSpecificApproverIds = [
-    ...(Array.isArray(approverUserIds) ? approverUserIds : []),
-    ...departmentMappings.flatMap(dm => dm.approverUserIds || [])
-  ];
-
-  if (allSpecificApproverIds.length > 0) {
-    const uniqueIds = [...new Set(allSpecificApproverIds)];
-    const users = await prisma.user.findMany({
-      where: { id: { in: uniqueIds }, orgSyncedAt: { not: null } },
-      select: { id: true }
-    });
-    if (users.length !== uniqueIds.length) {
-      throw new Error("All approvers must be Entra synced users");
-    }
-  }
-
-  return prisma.$transaction(async (tx) => {
-
-    const matrix = await tx.approvalMatrix.create({
-      data: { ...rest, vendorEmail, approvalPattern, departmentId: resolvedDepartmentId, isActive: isActive ?? true }
+    const overlapping = await prisma.approvalMatrix.findFirst({
+      where: {
+        claimType: data.claimType,
+        departmentId: resolvedDepartmentId,
+        minAmount: { lt: maxAmount },
+        maxAmount: { gt: minAmount },
+        // FIX: sirf active/published matrices ke against overlap check karo,
+        // DRAFT matrices ko overlap-blocking mat banao
+        status: { not: "DRAFT" }
+      }
     });
 
-    if (departmentMappings.length > 0) {
-      
-      let sequence = 1;
-      const approverRows = [];
-      for (const mapping of departmentMappings) {
-        for (const userId of mapping.approverUserIds) {
-          approverRows.push({
+    if (overlapping) {
+      throw new Error(
+        `An overlapping approval workflow already exists for claim type ${data.claimType}, ` +
+        `department ${resolvedDepartmentId}, range ${overlapping.minAmount}-${overlapping.maxAmount}`
+      );
+    }
+
+    const {
+      approverUserIds,
+      approvers,
+      departmentMappings = [],
+      departmentId,
+      approvalPattern,
+      rules = [],
+      vendorEmail,
+      escalations = [],
+      isActive,
+      status,
+      ...rest
+    } = data;
+
+    const allSpecificApproverIds = [
+      ...(Array.isArray(approverUserIds) ? approverUserIds : []),
+      ...departmentMappings.flatMap(dm => dm.approverUserIds || [])
+    ];
+
+    if (allSpecificApproverIds.length > 0) {
+      const uniqueIds = [...new Set(allSpecificApproverIds)];
+      const users = await prisma.user.findMany({
+        where: { id: { in: uniqueIds }, orgSyncedAt: { not: null } },
+        select: { id: true }
+      });
+      if (users.length !== uniqueIds.length) {
+        throw new Error("All approvers must be Entra synced users");
+      }
+    }
+
+    // FIX: status aur isActive ko sync karo.
+    // Agar status explicitly "DRAFT" hai, to isActive false honi chahiye,
+    // chahe caller ne isActive true bheja ho ya kuch na bheja ho.
+    const resolvedStatus = status || (isActive === false ? "DRAFT" : "ACTIVE");
+    const resolvedIsActive = resolvedStatus === "DRAFT" ? false : (isActive ?? true);
+
+    return prisma.$transaction(async (tx) => {
+      const matrix = await tx.approvalMatrix.create({
+        data: {
+          ...rest,
+          vendorEmail,
+          approvalPattern,
+          departmentId: resolvedDepartmentId,
+          isActive: resolvedIsActive,
+          status: resolvedStatus
+        }
+      });
+
+      if (departmentMappings.length > 0) {
+        let sequence = 1;
+        const approverRows = [];
+        for (const mapping of departmentMappings) {
+          for (const userId of mapping.approverUserIds) {
+            approverRows.push({
+              approvalMatrixId: matrix.id,
+              departmentId: mapping.departmentId,
+              specificUserId: userId,
+              sequence: sequence++,
+              isParallel: false,
+              groupKey: null
+            });
+          }
+        }
+        await tx.approvalMatrixApprover.createMany({ data: approverRows });
+
+      } else if (Array.isArray(approverUserIds) && approverUserIds.length > 0) {
+        await tx.approvalMatrixApprover.createMany({
+          data: approverUserIds.map((userId, idx) => ({
             approvalMatrixId: matrix.id,
-            departmentId: mapping.departmentId,
             specificUserId: userId,
-            sequence: sequence++,
-            isParallel: false,
-            groupKey: null
-          });
-        }
+            sequence: approvalPattern === "PARALLEL" ? 1 : idx + 1,
+            isParallel: approvalPattern === "PARALLEL",
+            groupKey: approvalPattern === "PARALLEL" ? "GROUP1" : null
+          }))
+        });
+
+      } else if (Array.isArray(approvers) && approvers.length) {
+        await tx.approvalMatrixApprover.createMany({
+          data: approvers.map((roleId, idx) => ({ approvalMatrixId: matrix.id, roleId, sequence: idx + 1 }))
+        });
       }
-      await tx.approvalMatrixApprover.createMany({ data: approverRows });
 
-    } else if (Array.isArray(approverUserIds) && approverUserIds.length > 0) {
-      await tx.approvalMatrixApprover.createMany({
-        data: approverUserIds.map((userId, idx) => ({
-          approvalMatrixId: matrix.id,
-          specificUserId: userId,
-          sequence: approvalPattern === "PARALLEL" ? 1 : idx + 1,
-          isParallel: approvalPattern === "PARALLEL",
-          groupKey: approvalPattern === "PARALLEL" ? "GROUP1" : null
-        }))
-      });
-
-    } else if (Array.isArray(approvers) && approvers.length) {
-      await tx.approvalMatrixApprover.createMany({
-        data: approvers.map((roleId, idx) => ({ approvalMatrixId: matrix.id, roleId, sequence: idx + 1 }))
-      });
-    }
-
-    if (rules.length) {
-      await tx.workflowRule.createMany({
-        data: rules.map(rule => ({
-          approvalMatrixId: matrix.id, field: rule.field, operator: rule.operator, value: String(rule.value),
-          conditionGroup: rule.conditionGroup ?? null, approverRole: rule.approverRole ?? null, approverUserId: rule.approverUserId ?? null
-        }))
-      });
-    }
-
-    if (escalations.length) {
-      await tx.workflowEscalation.createMany({
-        data: escalations.map(e => ({
-          approvalMatrixId: matrix.id, afterHours: Number(e.afterHours), action: e.action, targetDesignationId: Number(e.targetDesignationId)
-        }))
-      });
-    }
-
-    return tx.approvalMatrix.findUnique({
-      where: { id: matrix.id },
-      include: {
-        rules: true,
-        escalations: true,
-        approvers: {
-          orderBy: { sequence: "asc" },
-          include: { role: true, department: true, specificUser: { include: { designation: true } } }
-        }
+      if (rules.length) {
+        await tx.workflowRule.createMany({
+          data: rules.map(rule => ({
+            approvalMatrixId: matrix.id, field: rule.field, operator: rule.operator, value: String(rule.value),
+            conditionGroup: rule.conditionGroup ?? null, approverRole: rule.approverRole ?? null, approverUserId: rule.approverUserId ?? null
+          }))
+        });
       }
+
+      if (escalations.length) {
+        await tx.workflowEscalation.createMany({
+          data: escalations.map(e => ({
+            approvalMatrixId: matrix.id, afterHours: Number(e.afterHours), action: e.action, targetDesignationId: Number(e.targetDesignationId)
+          }))
+        });
+      }
+
+      return tx.approvalMatrix.findUnique({
+        where: { id: matrix.id },
+        include: {
+          rules: true,
+          escalations: true,
+          approvers: {
+            orderBy: { sequence: "asc" },
+            include: { role: true, department: true, specificUser: { include: { designation: true } } }
+          }
+        }
+      });
     });
-  });
-}
+  }
 
   async getMatchingWorkflow(claimType, departmentId, amount) {
-
     const workflows = await prisma.approvalMatrix.findMany({
       where: {
         claimType,
         isActive: true,
+        // FIX: DRAFT workflows ko naye claims match/route karne se explicitly rok do,
+        // chahe isActive kisi wajah se true reh gaya ho
+        status: { not: "DRAFT" },
         ...(departmentId
           ? { OR: [{ departmentId }, { departmentId: null }] }
           : { departmentId: null }),
         ...(amount != null && !Number.isNaN(amount)
-          ? {
-              minAmount: { lte: amount },
-              maxAmount: { gte: amount }
-            }
+          ? { minAmount: { lte: amount }, maxAmount: { gte: amount } }
           : {})
       },
       include: {
         rules: true,
         escalations: true,
-        approvers: {
-          include: { role: true, specificUser: true }
-        }
+        approvers: { include: { role: true, specificUser: true } }
       }
     });
-   return workflows.sort((a, b) => {
 
+    return workflows.sort((a, b) => {
       const aSpecific = a.departmentId != null ? 1 : 0;
       const bSpecific = b.departmentId != null ? 1 : 0;
       if (aSpecific !== bSpecific) return bSpecific - aSpecific;
@@ -253,6 +247,7 @@ async create(data) {
         claimType,
         minAmount: { lte: amount },
         maxAmount: { gte: amount },
+        status: { not: "DRAFT" }, // FIX: yahan bhi DRAFT exclude karo
         ...(departmentId ? { departmentId: Number(departmentId) } : {})
       },
       orderBy: { minAmount: "desc" },
@@ -261,7 +256,7 @@ async create(data) {
           orderBy: { sequence: "asc" },
           include: { role: true, specificUser: { include: { designation: true } } }
         }
-      },
+      }
     });
   }
 }
