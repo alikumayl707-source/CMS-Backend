@@ -100,7 +100,7 @@ return {
   userId: user.id,
 
   displayName: user.name,
-
+email: user.email,
   managerId:
     user.reportsToId,
 email: user.email,

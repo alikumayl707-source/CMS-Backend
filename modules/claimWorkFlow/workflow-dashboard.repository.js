@@ -22,7 +22,6 @@ class WorkflowDashboardRepository {
       })
     ]);
 
-    // FIX: N+1 query hata kar ek hi groupBy call kiya, sab workflow IDs ke liye
     const workflowIds = workflows.map(w => w.id);
 
     const allStats = workflowIds.length > 0
@@ -33,7 +32,6 @@ class WorkflowDashboardRepository {
         })
       : [];
 
-    // Stats ko workflowId ke hisaab se group kar liya, fast lookup ke liye
     const statsByWorkflow = new Map();
     for (const row of allStats) {
       if (!statsByWorkflow.has(row.approvalMatrixId)) {

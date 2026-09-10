@@ -18,6 +18,27 @@ class UserController {
             next(error);
         }
     }
+async getMe(req, res, next) {
+  try {
+
+    const user = await userService.getById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Current user not found"
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: user
+    });
+
+  } catch (error) {
+    next(error);
+  }
+}
 async getCurrentUser(req, res, next) {
   try {
     const user = await userRepository.getPermissions(req.user.id);
@@ -33,10 +54,13 @@ async getCurrentUser(req, res, next) {
       success: true,
       data: {
         id: user.id,
+        employeeId: user.id,
         name: user.name,
+        employeeName: user.name,
         email: user.email,
-         departmentId: user.departmentId,
+        departmentId: user.departmentId,
         department: user.department?.name ?? null,
+        designation: user.designation?.name ?? null,
         permissionKeys: [...new Set(permissionKeys)]
       }
     });

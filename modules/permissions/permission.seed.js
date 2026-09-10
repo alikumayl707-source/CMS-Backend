@@ -12,7 +12,16 @@ module.exports = [
     label: "View Claim",
     module: "CLAIMS"
   },
-
+  { 
+    key: "ORG_VIEW",
+    label: "ORG VIEW",
+    module:"CLAIMS"
+   },
+  { 
+    key: "ORG_UPDATE",
+    label: "ORG UPDATE",
+    module:"CLAIMS"
+   },
   {
     key: "CLAIM_REVIEW",
     label: "Review Claim",

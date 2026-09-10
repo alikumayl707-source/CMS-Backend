@@ -9,13 +9,17 @@ const authorize = require("../../middleware/authorize.middleware");
 const audit = require("../../middleware/audit.middleware");
 
 router.get(
+    "/current",
+    userController.getMe
+);
+
+router.get(
     "/",
     authorize("USER_VIEW"),
     audit("VIEW_USERS", "USER"),
     userController.getAll
 );
 router.get('/me', userController.getCurrentUser);
-
 router.get(
     "/:id",
     authorize("USER_VIEW"),
