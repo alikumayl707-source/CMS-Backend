@@ -469,33 +469,33 @@ async addDocuments(claimId, files, userId, documentTypeId) {
         deleted: true
     };
 }
-async getDocumentStatus(claimId, documentId) {
+ async getDocumentStatus(claimId, documentId) {
 
-    await this.getById(claimId);
+     await this.getById(claimId);
 
-    const document =
-        await claimRepository.findDocument(
-            claimId,
-            documentId
-        );
+     const document =
+         await claimRepository.findDocument(
+             claimId,
+             documentId
+         );
 
-    if (!document) {
-        throw new AppError(
-            "Document not found",
-            404
-        );
-    }
+     if (!document) {
+         throw new AppError(
+             "Document not found",
+             404
+         );
+     }
 
-    return {
-        id: document.id,
-        fileName: document.fileName,
-        originalName: document.originalName,
-        mimeType: document.mimeType,
-        size: document.size,
-        uploadedAt: document.createdAt,
-        status: "UPLOADED"
-    };
-}
+     return {
+         id: document.id,
+         fileName: document.fileName,
+         originalName: document.originalName,
+         mimeType: document.mimeType,
+         size: document.size,
+         uploadedAt: document.createdAt,
+       status: "complete"
+     };
+ }
     async getDocuments(claimId) {
 
         await this.getById(claimId);
