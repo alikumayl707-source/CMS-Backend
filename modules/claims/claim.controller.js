@@ -1,4 +1,4 @@
-  const claimService =
+const claimService =
       require("./claim.service");
 
   const claimRepository =
@@ -74,7 +74,7 @@ async getWorkflow(req,res,next){
 
   async review(req, res, next) {
       try {
-          const claim = req.resource; 
+          const claim = req.resource;
           const result = await claimWorkflow.review(claim, req.user);
           return res.json({ success: true, data: result });
       } catch (error) {
@@ -83,25 +83,7 @@ async getWorkflow(req,res,next){
   }
 
 
-async getMyClaims(req, res, next) {
-  console.log(req)
-    try {
 
-        const result = await claimService.getMyClaims(
-            req.user.id,    
-            req.query
-        );
-
-        res.json({
-            success: true,
-            data: result.data,
-            pagination: result.pagination
-        });
-
-    } catch (error) {
-        next(error);
-    }
-}
 async approve(req, res, next) {
   try {
     const claim = req.resource;
@@ -174,7 +156,24 @@ async approve(req, res, next) {
       }
 
   }
+async getMyClaims(req, res, next) {
+    try {
 
+        const result = await claimService.getMyClaims(
+            req.user.id,
+            req.query
+        );
+
+        res.json({
+            success: true,
+            data: result.data,
+            pagination: result.pagination
+        });
+
+    } catch (error) {
+        next(error);
+    }
+}
     async listMyDrafts(req, res, next) {
 
       try {
@@ -293,7 +292,7 @@ async approve(req, res, next) {
 async submit(req, res, next) {
   try {
     const result = await claimService.submit(req.user.id, req.body);
-    res.locals.entityId = result.claim.id;   
+    res.locals.entityId = result.claim.id;
     return res.status(201).json({ success: true, data: result.claim, warning: result.duplicateWarning });
   } catch (error) { next(error); }
 }
@@ -311,7 +310,7 @@ async submit(req, res, next) {
               Number(req.params.id),
               req.files,
               req.user.id,
-              req.body.documentTypeId   
+              req.body.documentTypeId
           );
           return res.status(201).json({ success: true, data: documents });
       } catch (error) {
@@ -371,7 +370,48 @@ async downloadDocument(
       }
     }
 
-  
+    /* ==============================================================
+       REASSIGN APPROVER — NEW
+    ============================================================== */
+
+    async getReassignOptions(req, res, next) {
+
+      try {
+
+        const options = await claimService.getReassignOptions(
+          Number(req.params.id)
+        );
+
+        return res.json({
+          success: true,
+          data: options
+        });
+
+      } catch (error) {
+        next(error);
+      }
+    }
+
+    async reassignApprover(req, res, next) {
+
+      try {
+
+        const result = await claimService.reassignApprover(
+          Number(req.params.id),
+          req.user.id,
+          req.body
+        );
+
+        return res.json({
+          success: true,
+          data: result
+        });
+
+      } catch (error) {
+        next(error);
+      }
+    }
+
   }
 
   module.exports = new ClaimController();

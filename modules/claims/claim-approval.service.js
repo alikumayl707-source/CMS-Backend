@@ -7,13 +7,25 @@ const {
 } = require("../../utils/email.service");
 const notificationService =
  require("../workflow/notification.service");
-const prisma = require("../../prisma/index"); 
+const prisma = require("../../prisma/index");
 
 class ClaimApprovalService {
-async resolveClaimDepartmentId(claim) {
+
+  async resolveClaimDepartmentId(claim) {
 
     if (claim.departmentId) {
       return claim.departmentId;
+    }
+
+    if (claim.createdBy) {
+      const creator = await prisma.user.findUnique({
+        where: { id: claim.createdBy },
+        select: { departmentId: true }
+      });
+
+      if (creator?.departmentId) {
+        return creator.departmentId;
+      }
     }
 
     const deptName =
@@ -25,7 +37,7 @@ async resolveClaimDepartmentId(claim) {
       return null;
     }
 
-  
+
     let dept = await prisma.department.findFirst({
       where: {
         name: deptName
@@ -54,6 +66,27 @@ async resolveClaimDepartmentId(claim) {
     }
 
     return dept.id;
+  }
+
+
+  async resolveClaimLocationId(claim) {
+
+    if (claim.locationId) {
+      return claim.locationId;
+    }
+
+    if (claim.createdBy) {
+      const creator = await prisma.user.findUnique({
+        where: { id: claim.createdBy },
+        select: { locationId: true }
+      });
+
+      if (creator?.locationId) {
+        return creator.locationId;
+      }
+    }
+
+    return null;
   }
 
 async notifyApprover(
@@ -282,6 +315,7 @@ async initializeChain(claim, creatorId, resolvedMatrix = null) {
   }
 
   const claimDepartmentId = await this.resolveClaimDepartmentId(claim);
+  const claimLocationId = await this.resolveClaimLocationId(claim);
 
   const matrix = resolvedMatrix ?? await approvalMatrixService.determineWorkflow({
     claimType: claimType.code,
@@ -313,7 +347,40 @@ async initializeChain(claim, creatorId, resolvedMatrix = null) {
     throw new AppError("Approval chain already exists for this claim", 400);
   }
 
-  const approvers = [...matrix.approvers].sort((a, b) => a.sequence - b.sequence);
+  /*
+   * FIX — a single ApprovalMatrix rule can now hold MULTIPLE
+   * location+department combinations (Head Office/Finance,
+   * Plant/IT, Dealership/Sales...), each tagged with its own
+   * ApprovalMatrixApprover.locationId AND .departmentId. A row
+   * "matches" the claim when every dimension it carries agrees with
+   * the claim's resolved value (a null dimension on the row is a
+   * wildcard and always matches).
+   */
+  const allApprovers = matrix.approvers;
+
+  const hasScopedApprovers = allApprovers.some(
+    a => a.locationId != null || a.departmentId != null
+  );
+
+  let scopedApprovers = allApprovers;
+
+  if (hasScopedApprovers) {
+    scopedApprovers = allApprovers.filter(a => {
+      const locationOk = a.locationId == null || a.locationId === claimLocationId;
+      const departmentOk = a.departmentId == null || a.departmentId === claimDepartmentId;
+      return locationOk && departmentOk;
+    });
+
+    if (!scopedApprovers.length) {
+      throw new AppError(
+        `No approval chain is configured for this claim's location/department combination ` +
+        `(claim type ${claimType.code}). Ask an administrator to add this combination to the Approval Matrix rule.`,
+        422
+      );
+    }
+  }
+
+  const approvers = [...scopedApprovers].sort((a, b) => a.sequence - b.sequence);
 
   const firstSteps = approvers.filter(x => x.sequence === 1);
   const firstStep = firstSteps[0];
@@ -522,7 +589,7 @@ async advance(claim, actor, comments, lineItemDecisions) {
       403
     );
   }
-if (currentStep.roleId) {     
+if (currentStep.roleId) {
   await this.validateDepartmentalHead(claim, actor);
 }
   this.validateActorCanActOnStep(currentStep, actor, Number(claim.amount));
@@ -737,9 +804,9 @@ return prisma.claim.update({
   data: {
     systemStage: "FINANCE",
     assignedApproverId: financeApprover?.id ?? null,
-    reminderSentAt: null,      
-    escalatedAt: null,         
-    claimantNotifiedAt: null   
+    reminderSentAt: null,
+    escalatedAt: null,
+    claimantNotifiedAt: null
   }
 });
 }
@@ -791,12 +858,12 @@ async reject(claim, actor, comments) {
     throw new AppError(`No approval chain found for claim ${claim.id} at sequence ${claim.currentApprovalSequence}`, 500);
   }
 
-  if (currentStep.roleId) {   
+  if (currentStep.roleId) {
     await this.validateDepartmentalHead(claim, actor);
   }
 
   this.validateActorCanActOnStep(currentStep, actor, claim.amount);
- 
+
 
     await prisma.claimApproval.update({
       where: { id: currentStep.id },

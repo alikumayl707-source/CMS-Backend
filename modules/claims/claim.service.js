@@ -6,6 +6,10 @@ const claimRepository =
 const {
   sendClaimSubmittedEmail
 } = require("../../utils/email.service");
+// Same path claim-approval.service.js uses (from its "claims" folder) —
+// adjust if "claim" and "claims" aren't actually sibling folders.
+const notificationService =
+  require("../workflow/notification.service");
 
 const prisma =
   require("../../prisma/index");
@@ -70,7 +74,9 @@ class ClaimService {
 async getAll(query) {
   const { status, claimTypeId, createdBy, departmentId, search, page, pageSize, ...rest } = query;
   return claimRepository.findAll({
-    status, search,
+  
+    status: status || { not: "DRAFT" },
+    search,
     claimTypeId: claimTypeId ? Number(claimTypeId) : undefined,
     createdBy: createdBy ? Number(createdBy) : undefined,
     departmentId: departmentId ? Number(departmentId) : undefined,
@@ -117,7 +123,7 @@ async getAll(query) {
         );
 
         const matches = await claimRepository.findPotentialDuplicates({
-         
+
             claimTypeId: Number(claimTypeId),
             incidentDate,
             excludeId
@@ -142,7 +148,7 @@ async resubmitAfterRejection(userId, data) {
         throw new AppError("You can only resubmit your own claims", 403);
     }
 
-   
+
     await claimRepository.update(existingId, {
         status: "DRAFT",
         rejectedBy: null,
@@ -273,7 +279,7 @@ async submit(userId, data) {
     }
 
     const duplicateCheck = await this.checkDuplicate({
-       
+
         claimTypeId: claimType.id,
         incidentDate: existing.incidentDate
     }, existingId);
@@ -428,7 +434,7 @@ async addDocuments(claimId, files, userId, documentTypeId) {
                 size: file.size,
                 filePath: file.path,
                 uploadedById: userId,
-                documentTypeId: documentTypeId || null  
+                documentTypeId: documentTypeId || null
             })
         )
     );
@@ -501,6 +507,210 @@ async addDocuments(claimId, files, userId, documentTypeId) {
         await this.getById(claimId);
 
         return claimRepository.getDocuments(claimId);
+    }
+
+    /* ==============================================================
+       REASSIGN APPROVER — NEW
+
+       Two mechanisms exist in this codebase for "who is this claim
+       waiting on":
+
+       1. Normal ApprovalMatrix chain — tracked via ClaimApproval rows
+          (claim.currentApprovalSequence points at the active row).
+
+       2. HR / Finance system-stage bypass (claim.systemStage === 'HR'
+          or 'FINANCE') — has NO ClaimApproval row at all; the
+          assignment lives directly on claim.assignedApproverId
+          (see claim-approval.service.js initializeChain's bypass
+          branch and advanceToFinance/validateActorIsSystemDeptHead).
+
+       Both are handled below. Vendor-workflow claims (currentApprovalSequence
+       stays null, no ClaimApproval rows) fall through to "no pending
+       approval step" — reassignment isn't meaningful there since the
+       vendor is notified by email, not by user/role.
+    ============================================================== */
+
+    async getReassignOptions(claimId) {
+
+        const claim = await this.getById(claimId);
+
+        const [users, roles] = await Promise.all([
+            claimRepository.findReassignableUsers(),
+            claimRepository.findReassignableRoles()
+        ]);
+
+        // --- HR / Finance system-stage claims ---
+        if (claim.systemStage === "HR" || claim.systemStage === "FINANCE") {
+
+            return {
+                claim: {
+                    id: claim.id,
+                    claimNumber: claim.claimNumber,
+                    status: claim.status,
+                    systemStage: claim.systemStage,
+                    requiredApproverRole: claim.requiredApproverRole
+                },
+                pendingApproval: {
+                    id: null,
+                    sequence: null,
+                    roleId: null,
+                    roleName: claim.systemStage,
+                    approverId: claim.assignedApproverId,
+                    approverName: claim.assignedApprover?.name ?? null
+                },
+                users,
+                // Role reassignment doesn't apply to the fixed HR/Finance stage.
+                roles: []
+            };
+        }
+
+        // --- Normal approval-matrix chain ---
+        const pendingApproval = await claimRepository.findPendingApproval(
+            claimId,
+            claim.currentApprovalSequence
+        );
+
+        if (!pendingApproval) {
+            throw new AppError("This claim has no pending approval step to reassign", 400);
+        }
+
+        return {
+            claim: {
+                id: claim.id,
+                claimNumber: claim.claimNumber,
+                status: claim.status,
+                requiredApproverRole: claim.requiredApproverRole
+            },
+            pendingApproval: {
+                id: pendingApproval.id,
+                sequence: pendingApproval.sequence,
+                roleId: pendingApproval.roleId,
+                roleName: pendingApproval.role?.name ?? null,
+                approverId: pendingApproval.approverId,
+                approverName: pendingApproval.approver?.name ?? null
+            },
+            users,
+            roles
+        };
+    }
+
+    /*
+     * Reuses the same notification pipeline initializeChain()/advance()
+     * use — an in-app notification plus the approval email (with
+     * documents) — wrapped so a notification failure never blocks the
+     * reassignment itself from completing (same pattern as submit()'s
+     * email try/catch).
+     */
+    async notifyReassignedApprover(approver, claim) {
+
+        try {
+            await notificationService.notifyUser(
+                approver.id,
+                "Claim Approval Required",
+                `Claim ${claim.claimNumber || claim.id} has been reassigned to you for approval`
+            );
+        } catch (err) {
+            console.error(`Reassign notification (in-app) failed for claim ${claim.id}:`, err);
+        }
+
+        try {
+            const claimWithDocuments = await prisma.claim.findUnique({
+                where: { id: claim.id },
+                include: { documents: true, claimType: true, creator: true }
+            });
+
+            await claimApprovalService.notifyApprover(approver, claim, claimWithDocuments);
+        } catch (err) {
+            console.error(`Reassign notification (email) failed for claim ${claim.id}:`, err);
+        }
+    }
+
+    async reassignApprover(claimId, actorId, { approverId, roleId, comments } = {}) {
+
+        const claim = await this.getById(claimId);
+
+        if (!approverId && !roleId) {
+            throw new AppError("Select a new approver or role", 400);
+        }
+
+        // --- HR / Finance system-stage claims: no ClaimApproval row exists ---
+        if (claim.systemStage === "HR" || claim.systemStage === "FINANCE") {
+
+            if (!approverId) {
+                throw new AppError("Select a new approver for this stage", 400);
+            }
+
+            const newApprover = await prisma.user.findUnique({ where: { id: Number(approverId) } });
+            if (!newApprover) {
+                throw new AppError("Selected approver was not found", 404);
+            }
+
+            const updatedClaim = await claimRepository.update(claim.id, {
+                assignedApproverId: newApprover.id
+            });
+
+            await this.notifyReassignedApprover(newApprover, updatedClaim);
+
+            return updatedClaim;
+        }
+
+        // --- Normal approval-matrix chain ---
+        const pendingApproval = await claimRepository.findPendingApproval(
+            claimId,
+            claim.currentApprovalSequence
+        );
+
+        if (!pendingApproval) {
+            throw new AppError("This claim has no pending approval step to reassign", 400);
+        }
+
+        const updateData = {};
+        let newApprover = null;
+        let newRole = null;
+
+        if (approverId) {
+            newApprover = await prisma.user.findUnique({ where: { id: Number(approverId) } });
+            if (!newApprover) {
+                throw new AppError("Selected approver was not found", 404);
+            }
+            updateData.approverId = newApprover.id;
+        }
+
+        if (roleId) {
+            newRole = await prisma.role.findUnique({ where: { id: Number(roleId) } });
+            if (!newRole) {
+                throw new AppError("Selected role was not found", 404);
+            }
+            updateData.roleId = newRole.id;
+        }
+
+        await claimRepository.updateApprovalStep(pendingApproval.id, updateData);
+
+        await claimRepository.addApprovalHistory(
+            pendingApproval.id,
+            actorId,
+            "REASSIGNED",
+            comments ||
+                `Reassigned by administrator` +
+                (newApprover ? ` to ${newApprover.name}` : "") +
+                (newRole ? ` (role: ${newRole.name})` : "")
+        );
+
+        const claimUpdate = {};
+        if (newApprover) claimUpdate.assignedApproverId = newApprover.id;
+        if (newRole) claimUpdate.requiredApproverRole = newRole.name;
+
+        if (Object.keys(claimUpdate).length) {
+            await claimRepository.update(claim.id, claimUpdate);
+        }
+
+        const updatedClaim = await this.getById(claim.id);
+
+        if (newApprover) {
+            await this.notifyReassignedApprover(newApprover, updatedClaim);
+        }
+
+        return updatedClaim;
     }
 
 }

@@ -1,17 +1,18 @@
 const prisma = require("../../prisma/index");
 const notificationService = require("./notification.service");
+const escalationSettingsService = require("./escalation-settings.service");
 const { sendDigestEmail } = require("../../utils/email.service");
-
-const REMINDER_AFTER_HOURS = 24;
 
 class DigestService {
 
   async run() {
 
+    const settings = await escalationSettingsService.get();
+
     const digestMap = new Map();
 
-    await this._collectMatrixItems(digestMap);
-    await this._collectBypassItems(digestMap);
+    await this._collectMatrixItems(digestMap, settings);
+    await this._collectBypassItems(digestMap, settings);
 
     for (const [, entry] of digestMap) {
       await this._sendDigestToUser(entry);
@@ -20,7 +21,7 @@ class DigestService {
     console.log(`[digest] Sent ${digestMap.size} digest email(s).`);
   }
 
-  async _collectMatrixItems(digestMap) {
+  async _collectMatrixItems(digestMap, settings) {
 
     const approvals = await prisma.claimApproval.findMany({
       where: { status: "PENDING" },
@@ -38,7 +39,7 @@ class DigestService {
       if (!item.approver) continue;
 
       const ageHours = (now - new Date(item.createdAt).getTime()) / 36e5;
-      if (ageHours < REMINDER_AFTER_HOURS) continue;
+      if (ageHours < settings.digestReminderAfterHours) continue;
 
       this._addToDigest(digestMap, item.approver, {
         claimNumber: item.claim.claimNumber || `#${item.claim.id}`,
@@ -49,7 +50,7 @@ class DigestService {
     }
   }
 
-  async _collectBypassItems(digestMap) {
+  async _collectBypassItems(digestMap, settings) {
 
     const stuckClaims = await prisma.claim.findMany({
       where: {
@@ -66,7 +67,7 @@ class DigestService {
       if (!claim.assignedApprover) continue;
 
       const ageHours = (now - new Date(claim.updatedAt).getTime()) / 36e5;
-      if (ageHours < REMINDER_AFTER_HOURS) continue;
+      if (ageHours < settings.digestReminderAfterHours) continue;
 
       this._addToDigest(digestMap, claim.assignedApprover, {
         claimNumber: claim.claimNumber || `#${claim.id}`,

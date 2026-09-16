@@ -57,6 +57,12 @@ app.use(
   "/api/users",
   require("./modules/users/user.routes")
 );
+app.use("/api/entra", require("./modules/entra/entra-location.routes"));
+  app.use(
+       "/api/settings/escalation",
+       require("./modules/workflow/escalation-settings.routes")
+     );
+app.use("/api/locations", require("./modules/locations/location.route"));
 app.use(
   "/api/user-roles",
   require(

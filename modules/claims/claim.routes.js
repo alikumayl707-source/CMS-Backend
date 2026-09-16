@@ -71,6 +71,25 @@ authorize("CLAIM_REJECT"),
   claimController.reject
 );
 
+
+router.get(
+  "/:id/reassign-options",
+  loadClaimResource,
+  authorize("CLAIM_REASSIGN"),
+  claimController.getReassignOptions
+);
+
+router.put(
+  "/:id/reassign",
+  loadClaimResource,
+  authorize("CLAIM_REASSIGN"),
+  audit(
+    "CLAIM_REASSIGN",
+    "CLAIM"
+  ),
+  claimController.reassignApprover
+);
+
 router.get(
     "/",
     authorize("CLAIM_VIEW"),

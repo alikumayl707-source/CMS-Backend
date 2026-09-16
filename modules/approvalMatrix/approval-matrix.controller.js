@@ -80,16 +80,17 @@ async create(req, res, next) {
     const {
       claimType,
       departmentId,
-      departmentMappings,      
+      departmentMappings,
+      locationMappings,        // ← NEW
       minAmount,
       maxAmount,
-      approverUserIds,         
+      approverUserIds,
       approvalPattern,
       rules,
       vendorEmail,
       escalations,
       isActive,
-      status, 
+      status,
       approvalCommentRequired,
       rejectionCommentRequired
     } = req.body;
@@ -116,12 +117,28 @@ async create(req, res, next) {
           }))
       : [];
 
+   const normalizedLocationMappings = Array.isArray(locationMappings)
+  ? locationMappings
+      .filter(lm => lm && lm.locationId != null &&
+                    Array.isArray(lm.approverUserIds) && lm.approverUserIds.length > 0)
+      .map(lm => ({
+        locationId: Number(lm.locationId),
+        departmentId: lm.departmentId != null ? Number(lm.departmentId) : null,  // NEW
+        approverUserIds: lm.approverUserIds.map(Number)
+      }))
+  : [];
+
     const hasLegacyApprovers = Array.isArray(approverUserIds) && approverUserIds.length > 0;
 
-    if (requiresApprovalChain && normalizedDepartmentMappings.length === 0 && !hasLegacyApprovers) {
+    if (
+      requiresApprovalChain &&
+      normalizedDepartmentMappings.length === 0 &&
+      normalizedLocationMappings.length === 0 &&
+      !hasLegacyApprovers
+    ) {
       return res.status(400).json({
         success: false,
-        message: "At least one department with one approver is required"
+        message: "At least one location (or department) with one approver is required"
       });
     }
 
@@ -132,7 +149,8 @@ async create(req, res, next) {
     const data = await service.create({
       claimType,
       departmentId: departmentId ? Number(departmentId) : null,
-      departmentMappings: normalizedDepartmentMappings, 
+      departmentMappings: normalizedDepartmentMappings,
+      locationMappings: normalizedLocationMappings,   // ← NEW
       minAmount: Number(minAmount),
       maxAmount: Number(maxAmount),
       approverUserIds: hasLegacyApprovers ? approverUserIds.map(Number) : [],

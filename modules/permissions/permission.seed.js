@@ -12,12 +12,12 @@ module.exports = [
     label: "View Claim",
     module: "CLAIMS"
   },
-  { 
+  {
     key: "ORG_VIEW",
     label: "ORG VIEW",
     module:"CLAIMS"
    },
-  { 
+  {
     key: "ORG_UPDATE",
     label: "ORG UPDATE",
     module:"CLAIMS"
@@ -37,6 +37,12 @@ module.exports = [
   {
     key: "CLAIM_REJECT",
     label: "Reject Claim",
+    module: "CLAIMS"
+  },
+
+  {
+    key: "CLAIM_REASSIGN",
+    label: "Reassign Claim Approver",
     module: "CLAIMS"
   },
 
@@ -111,6 +117,8 @@ module.exports = [
   },
 { key: "DEPARTMENT_MANAGE", label: "Manage Departments", module: "ADMINISTRATION" },
 { key: "DESIGNATION_MANAGE", label: "Manage Designations", module: "ADMINISTRATION" },
+{ key: "SETTINGS_VIEW", label: "View Escalation Settings", module: "ADMINISTRATION" },
+{ key: "SETTINGS_MANAGE", label: "Manage Escalation Settings", module: "ADMINISTRATION" },
   {
     key: "ROLE_CREATE",
     label: "Create Role",
@@ -128,84 +136,84 @@ module.exports = [
     label: "Delete Role",
     module: "CLAIMS"
   },
-  { 
+  {
     key: "CLAIM_TRACK",
     label: "CLAIM TRACK",
     module:"CLAIMS"
    },
 
-     { 
+     {
     key: "CLAIM_ASSIGN_REVIEW",
     label: "CLAIM ASSIGN REVIEW",
     module:"CLAIMS"
    },
-     { 
+     {
     key: "CLAIM_ASSIGN_INVESTIGATION",
     label: "CLAIM ASSIGN INVESTIGATION",
     module:"CLAIMS"
    },
-     { 
+     {
     key: "CLAIM_INVESTIGATE",
     label: "CLAIM INVESTIGATE",
     module:"CLAIMS"
    },
-    { 
+    {
     key: "CLAIM_SETTLE",
     label: "CLAIM SETTLE",
     module:"CLAIMS"
    },
-    { 
+    {
     key: "CLAIM_ESCALATE",
     label: "CLAIM ESCALATE",
     module:"CLAIMS"
    },
-       { 
+       {
     key: "CLAIM_REOPEN",
     label: "CLAIM REOPEN",
     module:"CLAIMS"
    },
-       { 
+       {
     key: "CLAIM_CLOSE",
     label: "CLAIM CLOSE",
     module:"CLAIMS"
    },
-    { 
+    {
     key: "CLAIM_REPORT_VIEW",
     label: "CLAIM REPORT VIEW",
     module:"CLAIMS"
    },
-    { 
+    {
     key: "PERMISSION_DELETE",
     label: "PERMISSION DELETE",
     module:"CLAIMS"
    },
- 
-    { 
+
+    {
     key: "PERMISSION_UPDATE",
     label: "PERMISSION UPDATE",
     module:"CLAIMS"
    },
-       { 
+       {
     key: "PERMISSION_CREATE",
     label: "PERMISSION CREATE",
     module:"CLAIMS"
    },
-       { 
+       {
     key: "PERMISSION_VIEW",
     label: "PERMISSION VIEW",
     module:"CLAIMS"
    },
-       { 
+       {
     key: "AUDIT_VIEW",
     label: "AUDIT VIEW",
     module:"CLAIMS"
    },
-  { 
+  {
     key: "ORG_UPDATE",
     label: "ORG UPDATE",
     module:"CLAIMS"
    },
-       { 
+       {
     key: "USER_ROLE_ASSIGN",
     label: "USER ROLE ASSIGN",
     module:"CLAIMS"

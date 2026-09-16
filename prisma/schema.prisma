@@ -220,7 +220,30 @@ model Claim {
   @@index([assignedApproverId])
   @@index([dedupeHash])
 }
+model EscalationSettings {
+  id                       Int      @id @default(autoincrement())
 
+  escalateAfterHours       Int      @default(48)
+  claimantNotifyAfterHours Int      @default(72)
+  digestReminderAfterHours Int      @default(24)
+
+  fallbackApproverUserId   Int?
+
+  updatedAt                DateTime @updatedAt
+  updatedBy                Int?
+
+  @@map("escalation_settings")
+}
+
+model Location {
+  id   Int    @id @default(autoincrement())
+  name String @unique
+
+  users                   User[]
+  approvalMatrixApprovers ApprovalMatrixApprover[]
+
+  @@map("location")
+}
 model ApprovalMatrix {
 
   id Int @id @default(autoincrement())
@@ -310,8 +333,11 @@ model ApprovalMatrixApprover {
   department       Department?    @relation(fields: [departmentId], references: [id])  // NEW
   isParallel Boolean @default(false)
   groupKey String?
+  locationId Int?
+  location   Location? @relation(fields: [locationId], references: [id])
   @@index([approvalMatrixId, sequence])
-  @@index([departmentId])                                                              // NEW
+  @@index([departmentId])   
+  @@index([locationId])                                                           // NEW
 }
 
 
@@ -336,14 +362,15 @@ model User {
   claimApprovalHistory ClaimApprovalHistory[]
   claimApprovalActions ClaimApproval[]          @relation("ClaimApprovalActor")
   approvalMatrixSteps  ApprovalMatrixApprover[] @relation("ApprovalMatrixSpecificUser") // NEW
-isDepartmentHead Boolean @default(false)
+  isDepartmentHead Boolean @default(false)
   department    Department?    @relation(fields: [departmentId], references: [id])
   designation   Designation?   @relation(fields: [designationId], references: [id])
   jobTitle      JobTitle?      @relation(fields: [jobTitleId], references: [id])
   reportsTo     User?          @relation("ManagerEmployee", fields: [reportsToId], references: [id])
   subordinates  User[]         @relation("ManagerEmployee")
   notifications Notification[]
-
+  locationId Int?
+  location   Location? @relation(fields: [locationId], references: [id])
   userRoles           UserRole[] @relation("UserRoleUser")
   assignedRoleRecords UserRole[] @relation("UserRoleAssignedBy")
 
@@ -362,6 +389,7 @@ isDepartmentHead Boolean @default(false)
   reviewedTransitions  WorkflowTransition[]      @relation("TransitionReviewer")
   approvedTransitions  WorkflowTransition[]      @relation("TransitionApprover")
   transitionEvents     WorkflowTransitionEvent[]
+@@index([locationId])
 
   @@index([departmentId])
   @@index([designationId])

@@ -1,27 +1,30 @@
 const prisma = require("../../prisma/index");
 const notificationService = require("./notification.service");
+const escalationSettingsService = require("./escalation-settings.service");
 const {
   sendEscalationEmail,
   sendClaimantProgressEmail
 } = require("../../utils/email.service");
 
-const ESCALATE_AFTER_HOURS = 48;
-const CLAIMANT_NOTIFY_AFTER_HOURS = 72;
-
+// Last-resort fallback only — used when the admin hasn't picked a
+// fallback approver yet via the Escalation Settings dropdown
+// (settings.fallbackApproverUserId is null). Prefer configuring that
+// dropdown instead of relying on this env var going forward.
 const FALLBACK_ESCALATION_EMAIL =
   process.env.FALLBACK_ESCALATION_EMAIL || "anum.abdullah@byd-mega.com";
 
 class EscalationService {
 
 
-
   async run() {
-   // await this._handleMatrixApprovals();
-   // await this._handleBypassStages();
+    const settings = await escalationSettingsService.get();
+
+   await this._handleMatrixApprovals(settings);
+   await this._handleBypassStages(settings);
   }
 
 
-  async _handleMatrixApprovals() {
+  async _handleMatrixApprovals(settings) {
 
     const approvals = await prisma.claimApproval.findMany({
       where: { status: "PENDING" },
@@ -40,18 +43,19 @@ class EscalationService {
 
       const ageHours = (now - new Date(item.createdAt).getTime()) / 36e5;
 
-      await this._matrixEscalationCheck(item, ageHours);
+      await this._matrixEscalationCheck(item, ageHours, settings);
       await this._claimantProgressCheck(
         item.claim,
         ageHours,
-        `Pending with ${item.approver?.name || item.role?.name || "an approver"}`
+        `Pending with ${item.approver?.name || item.role?.name || "an approver"}`,
+        settings
       );
     }
   }
 
-  async _matrixEscalationCheck(item, ageHours) {
+  async _matrixEscalationCheck(item, ageHours, settings) {
 
-    if (ageHours < ESCALATE_AFTER_HOURS || item.escalatedAt) return;
+    if (ageHours < settings.escalateAfterHours || item.escalatedAt) return;
 
     const claimTypeCode = item.claim.claimType?.code;
     if (!claimTypeCode) return;
@@ -116,7 +120,7 @@ class EscalationService {
   // ============================================================
   // Bypass-chain claims (systemStage "HR" / "FINANCE")
   // ============================================================
-  async _handleBypassStages() {
+  async _handleBypassStages(settings) {
 
     const stuckClaims = await prisma.claim.findMany({
       where: {
@@ -132,27 +136,53 @@ class EscalationService {
 
       const ageHours = (now - new Date(claim.updatedAt).getTime()) / 36e5;
 
-      await this._bypassEscalationCheck(claim, ageHours);
+      await this._bypassEscalationCheck(claim, ageHours, settings);
       await this._claimantProgressCheck(
         claim,
         ageHours,
-        `Pending with ${claim.systemStage} (${claim.assignedApprover?.name || "unassigned"})`
+        `Pending with ${claim.systemStage} (${claim.assignedApprover?.name || "unassigned"})`,
+        settings
       );
     }
   }
 
-  async _bypassEscalationCheck(claim, ageHours) {
+  /*
+   * Resolves who bypass-stage escalations go to. Priority:
+   *   1. settings.fallbackApproverUserId — the admin-picked dropdown
+   *      value (Escalation Settings panel).
+   *   2. FALLBACK_ESCALATION_EMAIL env var — only used if the admin
+   *      hasn't configured #1 yet.
+   */
+  async _resolveFallbackApprover(settings) {
 
-    if (ageHours < ESCALATE_AFTER_HOURS || claim.escalatedAt) return;
+    if (settings.fallbackApproverUserId) {
+      const user = await prisma.user.findUnique({
+        where: { id: settings.fallbackApproverUserId }
+      });
 
-    const fallbackUser = await prisma.user.findUnique({
+      if (user) return user;
+
+      console.warn(
+        `Escalation: configured fallbackApproverUserId ${settings.fallbackApproverUserId} ` +
+        `no longer exists. Falling back to FALLBACK_ESCALATION_EMAIL.`
+      );
+    }
+
+    return prisma.user.findUnique({
       where: { email: FALLBACK_ESCALATION_EMAIL }
     });
+  }
+
+  async _bypassEscalationCheck(claim, ageHours, settings) {
+
+    if (ageHours < settings.escalateAfterHours || claim.escalatedAt) return;
+
+    const fallbackUser = await this._resolveFallbackApprover(settings);
 
     if (!fallbackUser) {
       console.error(
-        `Escalation fallback user not found for email "${FALLBACK_ESCALATION_EMAIL}". ` +
-        `Set FALLBACK_ESCALATION_EMAIL in .env, or verify this user exists.`
+        `Escalation: no fallback approver configured. Set one in the ` +
+        `Escalation Settings panel, or set FALLBACK_ESCALATION_EMAIL in .env.`
       );
       return;
     }
@@ -186,9 +216,9 @@ class EscalationService {
     }
   }
 
-  async _claimantProgressCheck(claim, ageHours, stageDescription) {
+  async _claimantProgressCheck(claim, ageHours, stageDescription, settings) {
 
-    if (ageHours < CLAIMANT_NOTIFY_AFTER_HOURS || claim.claimantNotifiedAt) return;
+    if (ageHours < settings.claimantNotifyAfterHours || claim.claimantNotifiedAt) return;
 
     await prisma.claim.update({
       where: { id: claim.id },

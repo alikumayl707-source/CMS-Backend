@@ -6,7 +6,7 @@ const authorize = require("../../middleware/authorize.middleware");
 
 router.get(
   "/dashboard",
-  authorize('VIEW_DASHBOARD'),
+  //authorize('VIEW_DASHBOARD'),
   controller.getDashboard
 );
 

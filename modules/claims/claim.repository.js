@@ -29,7 +29,7 @@ const includeDefault = {
 class ClaimRepository {
 
     async create(data) {
-        
+
         return prisma.claim.create({
             data,
             include: includeDefault
@@ -62,12 +62,12 @@ const where = {
   : {})
 };
 
- 
+
 Object.entries(filters).forEach(([key, value]) => {
   if (value === undefined || value === null || value === '') return;
- 
+
   switch (key) {
- 
+
     case 'claimType.code':
       where.claimType = {
         code: {
@@ -76,13 +76,13 @@ Object.entries(filters).forEach(([key, value]) => {
       };
       break;
 
- 
+
     case 'claimNumber':
       where.claimNumber = {
         contains: value
       };
       break;
- 
+
     case 'amount': {
       const num = Number(value);
       if (!Number.isNaN(num)) {
@@ -90,7 +90,7 @@ Object.entries(filters).forEach(([key, value]) => {
       }
       break;
     }
- 
+
     case 'createdAt':
     case 'createdDate': {
       const start = new Date(value);
@@ -102,17 +102,17 @@ Object.entries(filters).forEach(([key, value]) => {
       }
       break;
     }
- 
+
     default:
       break;
   }
 });
- 
+
     page = Number(page);
     pageSize = Number(pageSize);
- 
+
     const skip = (page - 1) * pageSize;
- 
+
 const [data, total] = await prisma.$transaction([
   prisma.claim.findMany({
     where,
@@ -141,10 +141,20 @@ const enrichedData = data.map(claim => ({
     : claim.systemStage === "HR"
     ? "👥 Awaiting HR Approval"
 
+
+    : claim.assignedApprover?.name
+    ? `⏳ Awaiting ${claim.assignedApprover.name}` +
+      (claim.requiredApproverRole ? ` (${claim.requiredApproverRole})` : "")
+
     : claim.requiredApproverRole
     ? `⏳ Awaiting ${claim.requiredApproverRole}`
 
-    : "⏳ Pending Approval"
+    : "⏳ Pending Approval",
+
+
+ hoursInCurrentStage: Math.round(
+   (Date.now() - new Date(claim.updatedAt).getTime()) / 36e5
+ )
 }));
 
 return {
@@ -201,7 +211,7 @@ async deleteDocument(documentId) {
     }
 
     async findPotentialDuplicates({
-       
+
         claimTypeId,
         incidentDate,
         excludeId,
@@ -268,6 +278,61 @@ async deleteDocument(documentId) {
     async findDocumentById(id) {
         return prisma.claimDocument.findUnique({
             where: { id }
+        });
+    }
+
+    /* ==============================================================
+       REASSIGN APPROVER — NEW
+
+       findPendingApproval targets the EXACT step the claim is
+       currently sitting on (claimId + currentApprovalSequence),
+       matching the same lookup claim-approval.service.js's
+       advance()/reject() use — not just "any PENDING row" — so it
+       stays correct even with parallel-group steps sharing a
+       sequence number.
+    ============================================================== */
+
+    async findPendingApproval(claimId, sequence) {
+        if (sequence == null) {
+            return null;
+        }
+        return prisma.claimApproval.findFirst({
+            where: { claimId, sequence, status: "PENDING" },
+            include: { approver: true, role: true }
+        });
+    }
+
+    async updateApprovalStep(approvalId, data) {
+        return prisma.claimApproval.update({
+            where: { id: approvalId },
+            data,
+            include: { approver: true, role: true }
+        });
+    }
+
+    async addApprovalHistory(claimApprovalId, actorId, action, comments) {
+        return prisma.claimApprovalHistory.create({
+            data: { claimApprovalId, actorId, action, comments }
+        });
+    }
+
+    async findReassignableUsers() {
+        return prisma.user.findMany({
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                department: { select: { id: true, name: true } },
+                designation: { select: { id: true, name: true } }
+            },
+            orderBy: { name: "asc" }
+        });
+    }
+
+    async findReassignableRoles() {
+        return prisma.role.findMany({
+            select: { id: true, name: true },
+            orderBy: { name: "asc" }
         });
     }
 

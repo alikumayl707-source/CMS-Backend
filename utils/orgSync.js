@@ -2,7 +2,43 @@ const prisma = require("../prisma/index");
 require("dotenv").config();
 
 let secrets = null;
+const OFFICE_LOCATION_ALIASES = {
+  "hq": "Head Office",
+  "head office": "Head Office",
+  "head office - karachi": "Head Office",      // ← 161 users, YEH ASAL FIX HAI
+  "18th floor": "Head Office",
+  "ho-18th floor": "Head Office",
+  "18th floor - reception": "Head Office",
 
+  "gharo plant": "Plant",
+  "plant": "Plant",
+  "factory": "Plant",
+
+  "dealership": "Dealership",
+  "dealer": "Dealership",
+  "care center - korangi - karachi": "Dealership",
+  "experience center - islamabad": "Dealership",
+  "experience center - metropole - karachi": "Dealership",
+  "care center - dha lahore": "Dealership",
+  "experience center - gulberg lahore": "Dealership",
+  "denza - outlet": "Dealership"
+};
+
+async function resolveLocationFromOfficeLocation(officeLocationRaw) {
+  if (!officeLocationRaw) return null;
+
+  const key = officeLocationRaw.trim().toLowerCase();
+  const mappedName = OFFICE_LOCATION_ALIASES[key] || officeLocationRaw.trim();
+
+  const location = await prisma.location.findFirst({ where: { name: mappedName } });
+
+  if (!location) {
+    console.warn(`orgSync: Entra officeLocation "${officeLocationRaw}" did not match any Location row.`);
+    return null;
+  }
+
+  return location;
+}
 async function getSecrets() {
   if (secrets) return secrets;
 
@@ -137,7 +173,7 @@ async function syncManagerChain(userEmail, localUser, token) {
   const managerEmail = manager.mail || manager.userPrincipalName;
 
   const profileRes = await fetch(
-    `https://graph.microsoft.com/v1.0/users/${managerEmail}?$select=department,jobTitle`,
+    `https://graph.microsoft.com/v1.0/users/${managerEmail}?$select=department,jobTitle,officeLocation`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   const profile = profileRes.ok ? await profileRes.json() : {};
@@ -190,9 +226,9 @@ const payload = JSON.parse(
   ).toString()
 );
 
-console.log("TOKEN ROLES:", payload.roles);
 const profileRes = await fetch(
-  `https://graph.microsoft.com/v1.0/users/${email}?$select=department,jobTitle`,
+  `https://graph.microsoft.com/v1.0/users/${email}?$select=department,jobTitle,officeLocation`,
+  
   {
     headers: {
       Authorization: `Bearer ${token}`
@@ -204,9 +240,7 @@ const profile = profileRes.ok
   ? await profileRes.json()
   : {};
 
-console.log("PROFILE:", profile);
-console.log("Department:", profile.department);
-console.log("Job Title:", profile.jobTitle);
+
 let managerId =
   await syncManagerChain(
     email,
@@ -225,13 +259,11 @@ const managerRes = await fetch(
 if (managerRes.ok) {
   const manager = await managerRes.json();
 
-  console.log("MANAGER:", manager);
 
   const managerEmail =
     manager.mail ||
     manager.userPrincipalName;
 
-  console.log("MANAGER EMAIL:", managerEmail);
 
   let managerUser =
     await prisma.user.findUnique({
@@ -258,14 +290,15 @@ if (managerRes.ok) {
 }
   const department = await findOrCreateDepartment(profile.department);
   const designation = await findOrCreateDesignation(profile.jobTitle);
-await autoAssignRoleFromDesignation(localUser.id, designation?.id);   // ← NAYI LINE
-
+await autoAssignRoleFromDesignation(localUser.id, designation?.id);   
+const location = await resolveLocationFromOfficeLocation(profile.officeLocation);
   return prisma.user.update({
     where: { id: localUser.id },
     data: {
       departmentId: department?.id ?? localUser.departmentId,
       designationId: designation?.id ?? localUser.designationId,
       reportsToId: managerId ?? localUser.reportsToId,
+      locationId: location?.id ?? localUser.locationId,
       orgSyncedAt: new Date() 
     }
   });
@@ -278,5 +311,6 @@ module.exports = {
   findOrCreateDepartment,
   findOrCreateDesignation,
   autoAssignRoleFromDesignation,
+  resolveLocationFromOfficeLocation,
   getGraphToken
 };

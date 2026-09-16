@@ -45,6 +45,7 @@ class ApprovalMatrixRepository {
             orderBy: { sequence: "asc" },
             include: {
               role: true,
+              location: true,
               specificUser: { include: { designation: true } }
             }
           }
@@ -78,8 +79,7 @@ class ApprovalMatrixRepository {
         departmentId: resolvedDepartmentId,
         minAmount: { lt: maxAmount },
         maxAmount: { gt: minAmount },
-        // FIX: sirf active/published matrices ke against overlap check karo,
-        // DRAFT matrices ko overlap-blocking mat banao
+      
         status: { not: "DRAFT" }
       }
     });
@@ -95,6 +95,7 @@ class ApprovalMatrixRepository {
       approverUserIds,
       approvers,
       departmentMappings = [],
+      locationMappings = [],
       departmentId,
       approvalPattern,
       rules = [],
@@ -107,7 +108,8 @@ class ApprovalMatrixRepository {
 
     const allSpecificApproverIds = [
       ...(Array.isArray(approverUserIds) ? approverUserIds : []),
-      ...departmentMappings.flatMap(dm => dm.approverUserIds || [])
+      ...departmentMappings.flatMap(dm => dm.approverUserIds || []),
+      ...locationMappings.flatMap(lm => lm.approverUserIds || [])
     ];
 
     if (allSpecificApproverIds.length > 0) {
@@ -121,9 +123,7 @@ class ApprovalMatrixRepository {
       }
     }
 
-    // FIX: status aur isActive ko sync karo.
-    // Agar status explicitly "DRAFT" hai, to isActive false honi chahiye,
-    // chahe caller ne isActive true bheja ho ya kuch na bheja ho.
+
     const resolvedStatus = status || (isActive === false ? "DRAFT" : "ACTIVE");
     const resolvedIsActive = resolvedStatus === "DRAFT" ? false : (isActive ?? true);
 
@@ -139,10 +139,29 @@ class ApprovalMatrixRepository {
         }
       });
 
-      if (departmentMappings.length > 0) {
-        let sequence = 1;
+if (locationMappings.length > 0) {
+  const approverRows = [];
+  for (const mapping of locationMappings) {
+    let sequence = 1;
+    for (const userId of mapping.approverUserIds) {
+      approverRows.push({
+        approvalMatrixId: matrix.id,
+        locationId: mapping.locationId,
+        departmentId: mapping.departmentId ?? null,   
+        specificUserId: userId,
+        sequence: sequence++,
+        isParallel: false,
+        groupKey: null
+      });
+    }
+  }
+  await tx.approvalMatrixApprover.createMany({ data: approverRows });
+
+} else if (departmentMappings.length > 0) {
+  
         const approverRows = [];
         for (const mapping of departmentMappings) {
+          let sequence = 1;
           for (const userId of mapping.approverUserIds) {
             approverRows.push({
               approvalMatrixId: matrix.id,
@@ -197,7 +216,12 @@ class ApprovalMatrixRepository {
           escalations: true,
           approvers: {
             orderBy: { sequence: "asc" },
-            include: { role: true, department: true, specificUser: { include: { designation: true } } }
+            include: {
+              role: true,
+              department: true,
+              location: true,
+              specificUser: { include: { designation: true } }
+            }
           }
         }
       });
@@ -222,7 +246,7 @@ class ApprovalMatrixRepository {
       include: {
         rules: true,
         escalations: true,
-        approvers: { include: { role: true, specificUser: true } }
+        approvers: { include: { role: true, location: true, specificUser: true } }
       }
     });
 
@@ -254,7 +278,7 @@ class ApprovalMatrixRepository {
       include: {
         approvers: {
           orderBy: { sequence: "asc" },
-          include: { role: true, specificUser: { include: { designation: true } } }
+          include: { role: true, location: true, specificUser: { include: { designation: true } } }
         }
       }
     });

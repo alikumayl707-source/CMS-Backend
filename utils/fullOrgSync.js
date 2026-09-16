@@ -1,6 +1,5 @@
 const prisma = require("../prisma/index");
-const { getGraphToken, findOrCreateDepartment, findOrCreateDesignation, autoAssignRoleFromDesignation  } = require("./orgSync");
-
+const { getGraphToken, findOrCreateDepartment, findOrCreateDesignation, autoAssignRoleFromDesignation, resolveLocationFromOfficeLocation } = require("./orgSync");
 async function syncFullOrganization() {
   const token = await getGraphToken();
 
@@ -33,13 +32,14 @@ async function syncFullOrganization() {
 
     const department = await findOrCreateDepartment(entraUser.department);
     const designation = await findOrCreateDesignation(entraUser.jobTitle);
-
+const location = await resolveLocationFromOfficeLocation(entraUser.officeLocation);
     const localUser = await prisma.user.upsert({
       where: { email },
       update: {
         name: entraUser.displayName || email.split("@")[0],
         departmentId: department?.id ?? undefined,
         designationId: designation?.id ?? undefined,
+        locationId: location?.id ?? undefined,
         orgSyncedAt: new Date()
       },
       create: {
@@ -48,10 +48,11 @@ async function syncFullOrganization() {
         password: "ENTRA_LOGIN",
         departmentId: department?.id ?? null,
         designationId: designation?.id ?? null,
+        locationId: location?.id ?? null, 
         orgSyncedAt: new Date()
       }
     });
-  await autoAssignRoleFromDesignation(localUser.id, designation?.id);   // ← NAYI LINE
+  await autoAssignRoleFromDesignation(localUser.id, designation?.id);   
 
     emailToLocalId.set(email.toLowerCase(), localUser.id);
   }
