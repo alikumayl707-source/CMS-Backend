@@ -347,15 +347,7 @@ async initializeChain(claim, creatorId, resolvedMatrix = null) {
     throw new AppError("Approval chain already exists for this claim", 400);
   }
 
-  /*
-   * FIX — a single ApprovalMatrix rule can now hold MULTIPLE
-   * location+department combinations (Head Office/Finance,
-   * Plant/IT, Dealership/Sales...), each tagged with its own
-   * ApprovalMatrixApprover.locationId AND .departmentId. A row
-   * "matches" the claim when every dimension it carries agrees with
-   * the claim's resolved value (a null dimension on the row is a
-   * wildcard and always matches).
-   */
+
   const allApprovers = matrix.approvers;
 
   const hasScopedApprovers = allApprovers.some(
@@ -526,27 +518,34 @@ async advance(claim, actor, comments, lineItemDecisions) {
 
  if (lineItemDecisions?.fieldName && claim.formData?.[lineItemDecisions.fieldName]) {
 
-    const fieldName = lineItemDecisions.fieldName;
-    const decisions = lineItemDecisions.decisions || {};
+  const fieldName = lineItemDecisions.fieldName;
+  const decisions = lineItemDecisions.decisions || {};
+  const editedRows = Array.isArray(lineItemDecisions.rows) ? lineItemDecisions.rows : null;
 
-    const updatedItems = claim.formData[fieldName].map((item, idx) => ({
+  const updatedItems = claim.formData[fieldName].map((item, idx) => {
+
+    const edited = editedRows?.[idx] ?? {};
+
+    return {
       ...item,
+      ...edited,
       lineStatus: decisions[idx] ?? item.lineStatus ?? "APPROVED"
-    }));
+    };
+  });
 
-    const newAmount = updatedItems.reduce(
-      (sum, item) => item.lineStatus === "REJECTED" ? sum : sum + (Number(item.amount) || 0),
-      0
-    );
+  const newAmount = updatedItems.reduce(
+    (sum, item) => item.lineStatus === "REJECTED" ? sum : sum + (Number(item.amount) || 0),
+    0
+  );
 
-    claim = await prisma.claim.update({
-      where: { id: claim.id },
-      data: {
-        formData: { ...claim.formData, [fieldName]: updatedItems },
-        amount: newAmount
-      }
-    });
-  }
+  claim = await prisma.claim.update({
+    where: { id: claim.id },
+    data: {
+      formData: { ...claim.formData, [fieldName]: updatedItems },
+      amount: newAmount
+    }
+  });
+}
 
   const matrix = claim.approvalMatrixId
     ? await prisma.approvalMatrix.findUnique({ where: { id: claim.approvalMatrixId } })
@@ -829,7 +828,8 @@ async reject(claim, actor, comments) {
 
   let currentStep = null;
 
-  if (claim.status !== "PENDING_APPROVAL") {
+ 
+  if (claim.status !== "PENDING_APPROVAL" && claim.status !== "PARTIALLY_APPROVED") {
     throw new AppError("Claim is not awaiting approval", 400);
   }
 
@@ -901,7 +901,7 @@ async reject(claim, actor, comments) {
 }
 
   validateSoD(claim, actor) {
-    if (claim.createdBy !== actor.id) {
+    if (claim.createdBy === actor.id) {
       throw new AppError("Creator cannot approve/reject their own claim", 403);
     }
     if (claim.reviewedBy === actor.id) {
