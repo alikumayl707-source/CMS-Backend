@@ -6,13 +6,6 @@ const {
   sendClaimantProgressEmail
 } = require("../../utils/email.service");
 
-// Last-resort fallback only — used when the admin hasn't picked a
-// fallback approver yet via the Escalation Settings dropdown
-// (settings.fallbackApproverUserId is null). Prefer configuring that
-// dropdown instead of relying on this env var going forward.
-const FALLBACK_ESCALATION_EMAIL =
-  process.env.FALLBACK_ESCALATION_EMAIL || "anum.abdullah@byd-mega.com";
-
 class EscalationService {
 
 
@@ -65,22 +58,39 @@ class EscalationService {
       include: { escalations: true }
     });
 
-    if (!workflow?.escalations?.length) return;
+    let targetUser = null;
 
-    const applicable = [...workflow.escalations]
-      .filter(e => ageHours >= e.afterHours)
-      .sort((a, b) => b.afterHours - a.afterHours)[0];
+    if (workflow?.escalations?.length) {
 
-    if (!applicable) return;
+      const applicable = [...workflow.escalations]
+        .filter(e => ageHours >= e.afterHours)
+        .sort((a, b) => b.afterHours - a.afterHours)[0];
 
-    const targetUser = await prisma.user.findFirst({
-      where: { designationId: applicable.targetDesignationId, orgSyncedAt: { not: null } }
-    });
+      if (applicable) {
+
+        targetUser = await prisma.user.findFirst({
+          where: { designationId: applicable.targetDesignationId, orgSyncedAt: { not: null } }
+        });
+
+        if (!targetUser) {
+          console.warn(
+            `Escalation: no eligible synced user for designation ${applicable.targetDesignationId} ` +
+            `(claim ${item.claimId}). Will retry next run.`
+          );
+          return;
+        }
+      }
+    }
+
+    if (!targetUser) {
+      targetUser = await this._resolveFallbackApprover(settings);
+    }
 
     if (!targetUser) {
       console.warn(
-        `Escalation: no eligible synced user for designation ${applicable.targetDesignationId} ` +
-        `(claim ${item.claimId}). Will retry next run.`
+        `Escalation: administrator has not selected an "Escalate bypass-stage claims to" ` +
+        `user in Escalation Settings, and no matrix-specific escalation is configured. ` +
+        `Claim ${item.claimId} was NOT escalated.`
       );
       return;
     }
@@ -117,10 +127,7 @@ class EscalationService {
     }
   }
 
-  // ============================================================
-  // Bypass-chain claims (systemStage "HR" / "FINANCE")
-  // ============================================================
-  async _handleBypassStages(settings) {
+ async _handleBypassStages(settings) {
 
     const stuckClaims = await prisma.claim.findMany({
       where: {
@@ -145,32 +152,25 @@ class EscalationService {
       );
     }
   }
-
-  /*
-   * Resolves who bypass-stage escalations go to. Priority:
-   *   1. settings.fallbackApproverUserId — the admin-picked dropdown
-   *      value (Escalation Settings panel).
-   *   2. FALLBACK_ESCALATION_EMAIL env var — only used if the admin
-   *      hasn't configured #1 yet.
-   */
   async _resolveFallbackApprover(settings) {
 
-    if (settings.fallbackApproverUserId) {
-      const user = await prisma.user.findUnique({
-        where: { id: settings.fallbackApproverUserId }
-      });
-
-      if (user) return user;
-
-      console.warn(
-        `Escalation: configured fallbackApproverUserId ${settings.fallbackApproverUserId} ` +
-        `no longer exists. Falling back to FALLBACK_ESCALATION_EMAIL.`
-      );
+    if (!settings.fallbackApproverUserId) {
+      return null;
     }
 
-    return prisma.user.findUnique({
-      where: { email: FALLBACK_ESCALATION_EMAIL }
+    const user = await prisma.user.findUnique({
+      where: { id: settings.fallbackApproverUserId }
     });
+
+    if (!user) {
+      console.warn(
+        `Escalation: configured fallbackApproverUserId ${settings.fallbackApproverUserId} ` +
+        `no longer exists. Ask an administrator to pick a valid user in Escalation Settings.`
+      );
+      return null;
+    }
+
+    return user;
   }
 
   async _bypassEscalationCheck(claim, ageHours, settings) {
@@ -180,9 +180,9 @@ class EscalationService {
     const fallbackUser = await this._resolveFallbackApprover(settings);
 
     if (!fallbackUser) {
-      console.error(
-        `Escalation: no fallback approver configured. Set one in the ` +
-        `Escalation Settings panel, or set FALLBACK_ESCALATION_EMAIL in .env.`
+      console.warn(
+        `Escalation: administrator has not selected an "Escalate bypass-stage claims to" ` +
+        `user in Escalation Settings. Claim ${claim.id} (${claim.systemStage}) was NOT escalated.`
       );
       return;
     }

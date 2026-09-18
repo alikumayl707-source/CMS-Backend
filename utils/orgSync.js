@@ -5,7 +5,7 @@ let secrets = null;
 const OFFICE_LOCATION_ALIASES = {
   "hq": "Head Office",
   "head office": "Head Office",
-  "head office - karachi": "Head Office",      // ← 161 users, YEH ASAL FIX HAI
+  "head office - karachi": "Head Office",      
   "18th floor": "Head Office",
   "ho-18th floor": "Head Office",
   "18th floor - reception": "Head Office",
