@@ -90,15 +90,7 @@ class WorkflowDashboardRepository {
     };
   }
 
-  /*
-   * Cheap approximation for the dashboard summary cards: uses
-   * claim.updatedAt as a proxy for "time in current stage". This is
-   * good enough for an at-a-glance overdue COUNT per workflow.
-   *
-   * getWorkflowClaims()/getClaimWorkflow() below use the more precise
-   * per-ClaimApproval-row createdAt (matching escalation.service.js's
-   * own age calculation exactly) when looking at an individual claim.
-   */
+
   async _getOverdueCounts(workflowIds, escalateAfterHours) {
 
     if (!workflowIds.length) {

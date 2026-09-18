@@ -9,16 +9,18 @@ router.get(
   //authorize('VIEW_DASHBOARD'),
   controller.getDashboard
 );
+router.get(
+  "/claims/:id/workflow",
+  controller.getClaimWorkflow
+);
+router.get(
+  "/:id",
+  controller.getWorkflowById
+);
 
-// router.get(
-//   "/:id",
-
-//   controller.getWorkflowById
-// );
-
-// router.get(
-//   "/:id/claims",
-//   controller.getWorkflowClaims
-// );
+router.get(
+  "/:id/claims",
+  controller.getWorkflowClaims
+);
 
 module.exports = router;
