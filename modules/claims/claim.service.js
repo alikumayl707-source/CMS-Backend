@@ -578,6 +578,10 @@ async reassignApprover(claimId, actorId, { approverId, roleId, comments } = {}) 
 
     const claim = await this.getById(claimId);
 
+    if (!["PENDING_APPROVAL", "PARTIALLY_APPROVED"].includes(claim.status)) {
+        throw new AppError("Only claims awaiting approval can be reassigned", 400);
+    }
+
     if (!approverId && !roleId) {
         throw new AppError("Select a new approver or role", 400);
     }
@@ -591,7 +595,6 @@ async reassignApprover(claimId, actorId, { approverId, roleId, comments } = {}) 
         throw new AppError("This claim has no pending approval step to reassign", 400);
     }
 
-    const updateData = {};
     let newApprover = null;
     let newRole = null;
 
@@ -603,7 +606,24 @@ async reassignApprover(claimId, actorId, { approverId, roleId, comments } = {}) 
         if (!newApprover) {
             throw new AppError("Selected approver was not found", 404);
         }
-        updateData.approverId = newApprover.id;
+        if (newApprover.id === claim.createdBy || newApprover.id === claim.reviewedBy) {
+            throw new AppError("The claimant or reviewer cannot approve this claim", 400);
+        }
+        if (newApprover.id === pendingApproval.approverId) {
+            throw new AppError(`${newApprover.name} is already the current approver`, 400);
+        }
+        if (!newApprover.email) {
+            throw new AppError(`${newApprover.name} has no email configured`, 400);
+        }
+        const laterStep = claim.approvals.find(
+            a => a.sequence > pendingApproval.sequence && a.approverId === newApprover.id
+        );
+        if (laterStep) {
+            throw new AppError(
+                `${newApprover.name} is already the approver at step ${laterStep.sequence}`,
+                400
+            );
+        }
     }
 
     if (roleId) {
@@ -611,36 +631,55 @@ async reassignApprover(claimId, actorId, { approverId, roleId, comments } = {}) 
         if (!newRole) {
             throw new AppError("Selected role was not found", 404);
         }
-        updateData.roleId = newRole.id;
     }
 
-    await claimRepository.updateApprovalStep(pendingApproval.id, updateData);
+    await prisma.$transaction(async (tx) => {
 
-    await claimRepository.addApprovalHistory(
-        pendingApproval.id,
-        actorId,
-        "REASSIGNED",
-        comments ||
-            `Reassigned by administrator` +
-            (newApprover ? ` to ${newApprover.name}` : "") +
-            (newRole ? ` (role: ${newRole.name})` : "")
-    );
+        // Only update if the step is still PENDING — guards against the
+        // current approver acting while the admin is reassigning.
+        const { count } = await tx.claimApproval.updateMany({
+            where: { id: pendingApproval.id, status: "PENDING" },
+            data: {
+                // Role-only reassignment: clear the named approver so any
+                // holder of the role can act.
+                approverId: newApprover ? newApprover.id : null,
+                ...(newRole ? { roleId: newRole.id } : {}),
+                reminderSentAt: null,
+                escalatedAt: null
+            }
+        });
 
-    const claimUpdate = {};
+        if (count === 0) {
+            throw new AppError(
+                "This step was actioned while you were reassigning it. Refresh and try again.",
+                409
+            );
+        }
 
-    if (newApprover) {
-        claimUpdate.assignedApproverId = newApprover.id;
-        claimUpdate.requiredApproverRole =
-            newApprover.designation?.name ?? newApprover.name ?? "APPROVER";
-    }
+        const previous =
+            pendingApproval.approver?.name ?? pendingApproval.role?.name ?? "Unassigned";
+        const next = newApprover?.name ?? `role ${newRole.name}`;
 
-    if (newRole) {
-        claimUpdate.requiredApproverRole = newRole.name;
-    }
+        await tx.claimApprovalHistory.create({
+            data: {
+                claimApprovalId: pendingApproval.id,
+                actorId,
+                action: "REASSIGNED",
+                comments: `Reassigned from ${previous} to ${next}` + (comments ? ` — ${comments}` : "")
+            }
+        });
 
-    if (Object.keys(claimUpdate).length) {
-        await claimRepository.update(claim.id, claimUpdate);
-    }
+        await tx.claim.update({
+            where: { id: claim.id },
+            data: {
+                assignedApproverId: newApprover ? newApprover.id : null,
+                requiredApproverRole:
+                    newRole?.name ?? newApprover?.designation?.name ?? newApprover?.name ?? "APPROVER",
+                reminderSentAt: null,
+                escalatedAt: null
+            }
+        });
+    });
 
     const updatedClaim = await this.getById(claim.id);
 
