@@ -6,20 +6,23 @@ const authorize = require("../../middleware/authorize.middleware");
 
 router.get(
   "/dashboard",
-  //authorize('VIEW_DASHBOARD'),
+  authorize('ORG_VIEW'),
   controller.getDashboard
 );
 router.get(
   "/claims/:id/workflow",
+  authorize('ORG_VIEW'),
   controller.getClaimWorkflow
 );
 router.get(
   "/:id",
+  authorize('ORG_VIEW'),
   controller.getWorkflowById
 );
 
 router.get(
   "/:id/claims",
+  authorize('ORG_VIEW'),
   controller.getWorkflowClaims
 );
 

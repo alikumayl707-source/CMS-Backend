@@ -1,7 +1,3 @@
-/*
-  Mount this router in your main app/routes aggregator, e.g.:
-    app.use("/api/settings/escalation", require("./modules/workflow/escalation-settings.routes"));
-*/
 
 const router = require("express").Router();
 const controller = require("./escalation-settings.controller");

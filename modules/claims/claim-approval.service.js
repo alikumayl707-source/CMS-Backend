@@ -9,6 +9,27 @@ const notificationService =
  require("../workflow/notification.service");
 const prisma = require("../../prisma/index");
 
+/* ──────────────────────────────────────────────────────────────
+   Line-item accounting codes (GL No. / Charge Head)
+
+   Entered by approvers on the approval screen and stored on each
+   line of formData[fieldName] as `glNo` and `chargeHead`.
+   Set REQUIRE_GL_CODING=true in .env to make both mandatory on
+   every approved line before a claim can be approved.
+   ────────────────────────────────────────────────────────────── */
+
+const GL_PATTERN = /^[A-Za-z0-9.\-\/]+$/;
+
+const CODING_FIELDS = [
+  { key: "glNo", label: "GL No.", maxLength: 20, pattern: GL_PATTERN },
+  { key: "chargeHead", label: "Charge Head", maxLength: 60, pattern: null }
+];
+
+const REQUIRE_GL_CODING = process.env.REQUIRE_GL_CODING === "true";
+
+/** claimApprovalHistory.comments is a Prisma String (VARCHAR(191) on MySQL). */
+const HISTORY_COMMENT_MAX = 191;
+
 class ClaimApprovalService {
 
   async resolveClaimDepartmentId(claim) {
@@ -87,6 +108,125 @@ class ClaimApprovalService {
     }
 
     return null;
+  }
+
+  /* ──────────────────────────────────────────────────────────────
+     Line items: decisions, rejection reasons and GL coding
+     ────────────────────────────────────────────────────────────── */
+
+  /** Trims a submitted code; empty strings become null (i.e. "cleared"). */
+  normalizeCodingValue(value) {
+    if (value === undefined || value === null) return null;
+    const trimmed = String(value).trim();
+    return trimmed.length ? trimmed : null;
+  }
+
+  /**
+   * Merges the approver's line-item decisions into the claim's line items.
+   *
+   * lineItemDecisions = {
+   *   fieldName: "expenses",
+   *   decisions: { 0: "APPROVED", 1: "REJECTED", ... },
+   *   comments:  { 1: "Receipt does not match", ... },
+   *   coding:    { 0: { glNo: "5010-200", chargeHead: "Staff Welfare" }, ... },
+   *   rows:      [ ...edited line objects... ]
+   * }
+   *
+   * Validates everything up front and throws before anything is written, so a
+   * claim never ends up half-updated. Returns the new items, the rejected ones,
+   * and a human-readable list of GL coding changes for the audit trail.
+   */
+  buildLineItems(claim, lineItemDecisions, { enforceRequiredCoding }) {
+
+    const fieldName = lineItemDecisions.fieldName;
+    const decisions = lineItemDecisions.decisions || {};
+    const lineComments = lineItemDecisions.comments || {};
+    const coding = lineItemDecisions.coding || {};
+    const editedRows = Array.isArray(lineItemDecisions.rows) ? lineItemDecisions.rows : null;
+
+    const codingChanges = [];
+
+    const updatedItems = claim.formData[fieldName].map((item, idx) => {
+
+      const edited = editedRows?.[idx] ?? {};
+      const status = decisions[idx] ?? item.lineStatus ?? "APPROVED";
+      const isRejected = status === "REJECTED";
+
+      const next = {
+        ...item,
+        ...edited,
+        lineStatus: status,
+        lineRejectionComment: isRejected
+          ? (String(lineComments[idx] ?? "").trim() || null)
+          : null
+      };
+
+      const lineChanges = [];
+
+      for (const field of CODING_FIELDS) {
+
+        // Prefer the explicit `coding` map; fall back to the edited row;
+        // if neither was sent, keep whatever the line already had.
+        // Rejected lines aren't paid, so their codes can't be changed.
+        const submitted = coding[idx]?.[field.key] ?? edited[field.key];
+        const value = (isRejected || submitted === undefined)
+          ? (item[field.key] ?? null)
+          : this.normalizeCodingValue(submitted);
+
+        if (!isRejected) {
+          if (value && value.length > field.maxLength) {
+            throw new AppError(
+              `Line ${idx + 1}: ${field.label} cannot be longer than ${field.maxLength} characters`,
+              400
+            );
+          }
+          if (value && field.pattern && !field.pattern.test(value)) {
+            throw new AppError(
+              `Line ${idx + 1}: ${field.label} can only contain letters, numbers, "-", "." and "/"`,
+              400
+            );
+          }
+          if (enforceRequiredCoding && REQUIRE_GL_CODING && !value) {
+            throw new AppError(`Line ${idx + 1} needs a ${field.label}`, 400);
+          }
+        }
+
+        next[field.key] = value;
+
+        const before = item[field.key] ?? null;
+        if (before !== value) {
+          lineChanges.push(`${field.label} ${before ?? "—"} → ${value ?? "—"}`);
+        }
+      }
+
+      if (lineChanges.length) {
+        codingChanges.push(`Line ${idx + 1}: ${lineChanges.join("; ")}`);
+      }
+
+      return next;
+    });
+
+    const rejectedItems = updatedItems.filter(item => item.lineStatus === "REJECTED");
+
+    if (rejectedItems.some(item => !item.lineRejectionComment)) {
+      throw new AppError("A rejection comment is required for every rejected line item", 400);
+    }
+
+    return { fieldName, updatedItems, rejectedItems, codingChanges };
+  }
+
+  /** One history row per changed line, so each entry fits the comments column. */
+  async recordCodingChanges(tx, claimApprovalId, actorId, codingChanges) {
+    for (const change of codingChanges) {
+      await tx.claimApprovalHistory.create({
+        data: {
+          claimApprovalId,
+          actorId,
+          action: "CODING_UPDATED",
+          comments: change.slice(0, HISTORY_COMMENT_MAX)
+        }
+      });
+    }
   }
 
 async notifyApprover(
@@ -558,47 +698,31 @@ async advance(claim, actor, comments, lineItemDecisions) {
 
   if (lineItemDecisions?.fieldName && claim.formData?.[lineItemDecisions.fieldName]) {
 
-    const fieldName = lineItemDecisions.fieldName;
-    const decisions = lineItemDecisions.decisions || {};
-    const lineComments = lineItemDecisions.comments || {};
-    const editedRows = Array.isArray(lineItemDecisions.rows) ? lineItemDecisions.rows : null;
+    // Throws before anything is written if a reason or a GL code is invalid.
+    const built = this.buildLineItems(claim, lineItemDecisions, { enforceRequiredCoding: true });
+    rejectedItems = built.rejectedItems;
 
-    const updatedItems = claim.formData[fieldName].map((item, idx) => {
-
-      const edited = editedRows?.[idx] ?? {};
-      const status = decisions[idx] ?? item.lineStatus ?? "APPROVED";
-
-      return {
-        ...item,
-        ...edited,
-        lineStatus: status,
-        lineRejectionComment: status === "REJECTED" ? (lineComments[idx]?.trim() || null) : null
-      };
-    });
-
-    rejectedItems = updatedItems.filter(item => item.lineStatus === "REJECTED");
-
-    // Validate before writing anything — a claim should never end up
-    // half-updated because a comment was missing.
-    if (rejectedItems.some(item => !item.lineRejectionComment)) {
-      throw new AppError("A rejection comment is required for every rejected line item", 400);
-    }
-
-    const newAmount = updatedItems.reduce(
+    const newAmount = built.updatedItems.reduce(
       (sum, item) => item.lineStatus === "REJECTED" ? sum : sum + (Number(item.amount) || 0),
       0
     );
 
-    claim = await prisma.claim.update({
-      where: { id: claim.id },
-      data: {
-        formData: { ...claim.formData, [fieldName]: updatedItems },
-        amount: newAmount
-      }
+    claim = await prisma.$transaction(async (tx) => {
+      const saved = await tx.claim.update({
+        where: { id: claim.id },
+        data: {
+          formData: { ...claim.formData, [built.fieldName]: built.updatedItems },
+          amount: newAmount
+        }
+      });
+
+      await this.recordCodingChanges(tx, currentStep.id, actor.id, built.codingChanges);
+
+      return saved;
     });
   }
 
-  // NEW: even a single rejected line item rejects the whole claim.
+  // Even a single rejected line item rejects the whole claim.
   if (rejectedItems.length > 0) {
     return this.rejectDueToLineItems(claim, actor, currentStep, rejectedItems);
   }
@@ -933,35 +1057,28 @@ async reject(claim, actor, comments, lineItemDecisions) {
 
   this.validateActorCanActOnStep(currentStep, actor, claim.amount);
 
-  // Persist per-line reject/approve decisions (if the approver used the
-  // line-wise Reject buttons) so the rejected row's full details — not
-  // just the free-text comment — can be surfaced in the claimant's email.
+  // Persist per-line decisions, reasons and GL coding so the rejected rows'
+  // full details can be surfaced in the claimant's email and the history.
   let rejectedItems = [];
 
   if (lineItemDecisions?.fieldName && claim.formData?.[lineItemDecisions.fieldName]) {
 
-    const fieldName = lineItemDecisions.fieldName;
-    const decisions = lineItemDecisions.decisions || {};
-    const editedRows = Array.isArray(lineItemDecisions.rows) ? lineItemDecisions.rows : null;
+    // A rejected claim isn't paid, so missing GL codes don't block it —
+    // but badly formatted ones are still refused.
+    const built = this.buildLineItems(claim, lineItemDecisions, { enforceRequiredCoding: false });
+    rejectedItems = built.rejectedItems;
 
-    const updatedItems = claim.formData[fieldName].map((item, idx) => {
-      const edited = editedRows?.[idx] ?? {};
-      const status = decisions[idx] ?? item.lineStatus ?? "APPROVED";
+    claim = await prisma.$transaction(async (tx) => {
+      const saved = await tx.claim.update({
+        where: { id: claim.id },
+        data: {
+          formData: { ...claim.formData, [built.fieldName]: built.updatedItems }
+        }
+      });
 
-      return {
-        ...item,
-        ...edited,
-        lineStatus: status
-      };
-    });
+      await this.recordCodingChanges(tx, currentStep.id, actor.id, built.codingChanges);
 
-    rejectedItems = updatedItems.filter(item => item.lineStatus === "REJECTED");
-
-    claim = await prisma.claim.update({
-      where: { id: claim.id },
-      data: {
-        formData: { ...claim.formData, [fieldName]: updatedItems }
-      }
+      return saved;
     });
   }
 

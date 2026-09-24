@@ -1,8 +1,7 @@
 const express = require("express");
 
 const router = express.Router();
-const claimRepository =
-  require("./claim.repository");
+
 const claimController =
     require("./claim.controller");
 const loadClaimResource =
