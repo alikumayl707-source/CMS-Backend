@@ -275,6 +275,154 @@ async function sendReminderEmail({
     throw new Error(await response.text());
   }
 }
+function formatFieldLabel(key) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/^./, s => s.toUpperCase());
+}
+
+async function sendClaimRejectedEmail({
+  to,
+  employeeName,
+  claimNumber,
+  claimType,
+  amount,
+  rejectionComments,
+  rejectedItems = [],
+  claimId
+}) {
+
+  const token = await getGraphToken();
+
+  const myClaimsUrl = `${process.env.FRONTEND_URL}/myClaim`;
+
+  const rejectedItemsHtml = rejectedItems.length
+    ? rejectedItems.map((item) => {
+
+        const fieldRows = Object.entries(item)
+          .filter(([key]) => !["lineStatus", "lineRejectionComment"].includes(key))
+          .map(([key, value]) => `
+            <tr>
+              <td style="padding:4px 16px 4px 0;color:#6b7280;white-space:nowrap;">${formatFieldLabel(key)}</td>
+              <td style="padding:4px 0;font-weight:600;">${value ?? "-"}</td>
+            </tr>
+          `).join("");
+
+        return `
+          <div style="margin-bottom:12px;padding:12px 14px;background:#fef2f2;border-radius:8px;">
+            <table style="border-collapse:collapse;">${fieldRows}</table>
+            ${item.lineRejectionComment ? `
+              <p style="margin:8px 0 0;color:#b91c1c;">
+                <b>Reason:</b> ${item.lineRejectionComment}
+              </p>
+            ` : ""}
+          </div>
+        `;
+      }).join("")
+    : `
+      <div style="padding:12px 14px;background:#fef2f2;border-radius:8px;color:#b91c1c;">
+        ${rejectionComments}
+      </div>
+    `;
+
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${process.env.MAIL_SENDER}/sendMail`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        message: {
+          subject: `Claim Rejected - ${claimNumber}`,
+          body: {
+            contentType: "HTML",
+            content: `
+              <div style="font-family:Segoe UI,Arial,sans-serif">
+
+                <h2>Your Claim Has Been Rejected</h2>
+
+                <p>Dear ${employeeName},</p>
+
+                <p>
+                  One or more line items on your claim were rejected during
+                  approval, so the full claim has been rejected.
+                </p>
+
+                <table style="border-collapse:collapse">
+                  <tr>
+                    <td><b>Claim Number</b></td>
+                    <td style="padding-left:15px;">${claimNumber}</td>
+                  </tr>
+                  <tr>
+                    <td><b>Claim Type</b></td>
+                    <td style="padding-left:15px;">${claimType}</td>
+                  </tr>
+                  <tr>
+                    <td><b>Amount</b></td>
+                    <td style="padding-left:15px;">${amount}</td>
+                  </tr>
+                  <tr>
+                    <td><b>Status</b></td>
+                    <td style="padding-left:15px;">REJECTED</td>
+                  </tr>
+                </table>
+
+                <br>
+
+                <p><b>Rejected Line Items:</b></p>
+                ${rejectedItemsHtml}
+
+                <br>
+
+                <p>
+                  Please edit this claim to address the rejected item(s) and
+                  resubmit it for approval.
+                </p>
+
+                <br>
+                <a href="${myClaimsUrl}"
+                  style="
+                    background:#dc2626;
+                    color:#fff;
+                    padding:14px 24px;
+                    text-decoration:none;
+                    border-radius:6px;
+                    display:inline-block;
+                    font-weight:600;
+                  "
+                >
+                  Edit and Resubmit Claim
+                </a>
+
+                <br><br>
+
+                <p>
+                  Regards,<br>
+                  Claims Management System
+                </p>
+
+              </div>
+            `
+          },
+          toRecipients: [
+            {
+              emailAddress: {
+                address: to
+              }
+            }
+          ]
+        },
+        saveToSentItems: true
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+}
 
 async function sendEscalationEmail({
   to,
@@ -463,5 +611,6 @@ module.exports = {
   sendReminderEmail,          
   sendEscalationEmail,
   sendClaimantProgressEmail,
+  sendClaimRejectedEmail,
   sendDigestEmail   
 };

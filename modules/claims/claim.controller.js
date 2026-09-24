@@ -126,7 +126,12 @@ async approve(req, res, next) {
   async reject(req, res, next) {
       try {
           const claim = req.resource;
-          const result = await claimWorkflow.reject(claim, req.user, req.body.comments);
+          const result = await claimWorkflow.reject(
+            claim,
+            req.user,
+            req.body.comments,
+            req.body.lineItemDecisions
+          );
           return res.json({ success: true, data: result });
       } catch (error) {
           next(error);

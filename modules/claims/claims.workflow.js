@@ -62,8 +62,8 @@ async cancel(
       actor
    );
 }
-  async reject(claim, actor, comments) {
-    return claimApprovalService.reject(claim, actor, comments);
+  async reject(claim, actor, comments, lineItemDecisions) {
+    return claimApprovalService.reject(claim, actor, comments, lineItemDecisions);
   }
 
   close(claim, actor) {

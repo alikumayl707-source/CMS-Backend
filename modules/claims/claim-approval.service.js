@@ -1,9 +1,9 @@
-const { PrismaClient } = require("@prisma/client");
 const approvalMatrixService = require("../approvalMatrix/approval-matrix.service");
 const organizationService = require("../organization/organization.service");
 const AppError = require("../../utils/appError");
 const {
-  sendApprovalEmail
+  sendApprovalEmail,
+  sendClaimRejectedEmail
 } = require("../../utils/email.service");
 const notificationService =
  require("../workflow/notification.service");
@@ -516,53 +516,12 @@ async advance(claim, actor, comments, lineItemDecisions) {
 
   this.validateSoD(claim, actor);
 
- if (lineItemDecisions?.fieldName && claim.formData?.[lineItemDecisions.fieldName]) {
-
-  const fieldName = lineItemDecisions.fieldName;
-  const decisions = lineItemDecisions.decisions || {};
-  const editedRows = Array.isArray(lineItemDecisions.rows) ? lineItemDecisions.rows : null;
-
-  const updatedItems = claim.formData[fieldName].map((item, idx) => {
-
-    const edited = editedRows?.[idx] ?? {};
-
-    return {
-      ...item,
-      ...edited,
-      lineStatus: decisions[idx] ?? item.lineStatus ?? "APPROVED"
-    };
-  });
-
-  const newAmount = updatedItems.reduce(
-    (sum, item) => item.lineStatus === "REJECTED" ? sum : sum + (Number(item.amount) || 0),
-    0
-  );
-
-  claim = await prisma.claim.update({
-    where: { id: claim.id },
-    data: {
-      formData: { ...claim.formData, [fieldName]: updatedItems },
-      amount: newAmount
-    }
-  });
-}
-
   const matrix = claim.approvalMatrixId
     ? await prisma.approvalMatrix.findUnique({ where: { id: claim.approvalMatrixId } })
     : await prisma.approvalMatrix.findFirst({ where: { claimType: claim.claimType?.code } });
 
   if (matrix?.approvalCommentRequired && !comments) {
     throw new AppError("Approval comments required", 400);
-  }
-
-  if (claim.systemStage === "HR") {
-    await this.validateActorIsSystemDeptHead(claim, actor, true);
-    return this.advanceToFinance(claim, actor);
-  }
-
-  if (claim.systemStage === "FINANCE") {
-    await this.validateActorIsSystemDeptHead(claim, actor, false);
-    return this.finalizeClaim(claim, actor);
   }
 
   const actorRoleIds = (actor.userRoles ?? []).map(
@@ -588,11 +547,61 @@ async advance(claim, actor, comments, lineItemDecisions) {
       403
     );
   }
-if (currentStep.roleId) {
-  await this.validateDepartmentalHead(claim, actor);
-}
+
+  if (currentStep.roleId) {
+    await this.validateDepartmentalHead(claim, actor);
+  }
+
   this.validateActorCanActOnStep(currentStep, actor, Number(claim.amount));
 
+  let rejectedItems = [];
+
+  if (lineItemDecisions?.fieldName && claim.formData?.[lineItemDecisions.fieldName]) {
+
+    const fieldName = lineItemDecisions.fieldName;
+    const decisions = lineItemDecisions.decisions || {};
+    const lineComments = lineItemDecisions.comments || {};
+    const editedRows = Array.isArray(lineItemDecisions.rows) ? lineItemDecisions.rows : null;
+
+    const updatedItems = claim.formData[fieldName].map((item, idx) => {
+
+      const edited = editedRows?.[idx] ?? {};
+      const status = decisions[idx] ?? item.lineStatus ?? "APPROVED";
+
+      return {
+        ...item,
+        ...edited,
+        lineStatus: status,
+        lineRejectionComment: status === "REJECTED" ? (lineComments[idx]?.trim() || null) : null
+      };
+    });
+
+    rejectedItems = updatedItems.filter(item => item.lineStatus === "REJECTED");
+
+    // Validate before writing anything — a claim should never end up
+    // half-updated because a comment was missing.
+    if (rejectedItems.some(item => !item.lineRejectionComment)) {
+      throw new AppError("A rejection comment is required for every rejected line item", 400);
+    }
+
+    const newAmount = updatedItems.reduce(
+      (sum, item) => item.lineStatus === "REJECTED" ? sum : sum + (Number(item.amount) || 0),
+      0
+    );
+
+    claim = await prisma.claim.update({
+      where: { id: claim.id },
+      data: {
+        formData: { ...claim.formData, [fieldName]: updatedItems },
+        amount: newAmount
+      }
+    });
+  }
+
+  // NEW: even a single rejected line item rejects the whole claim.
+  if (rejectedItems.length > 0) {
+    return this.rejectDueToLineItems(claim, actor, currentStep, rejectedItems);
+  }
 
   const result = await prisma.$transaction(async (tx) => {
 
@@ -714,8 +723,6 @@ if (currentStep.roleId) {
     return { updatedClaim, notifyInfo: null };
   });
 
-
-
   if (result.notifyInfo?.type === "next") {
 
     const eligibleId = result.notifyInfo.eligibleId;
@@ -737,6 +744,76 @@ if (currentStep.roleId) {
   }
 
   return result.updatedClaim;
+}
+
+
+async rejectDueToLineItems(claim, actor, currentStep, rejectedItems) {
+
+  const rejectedSummary = rejectedItems
+    .map((item, idx) => `Line item ${idx + 1}: ${item.lineRejectionComment || "No reason provided"}`)
+    .join(" | ");
+
+  const finalComments = `Rejected line item(s): ${rejectedSummary}`;
+
+  await prisma.$transaction(async (tx) => {
+
+    await tx.claimApproval.update({
+      where: { id: currentStep.id },
+      data: {
+        status: "REJECTED",
+        approverId: currentStep.approverId ?? actor.id,
+        actionedAt: new Date(),
+        comments: finalComments
+      }
+    });
+
+    await tx.claimApprovalHistory.create({
+      data: {
+        claimApprovalId: currentStep.id,
+        actorId: actor.id,
+        action: "REJECTED",
+        comments: finalComments
+      }
+    });
+
+    await tx.claim.update({
+      where: { id: claim.id },
+      data: {
+        status: "REJECTED",
+        rejectedBy: actor.id,
+        rejectionComments: finalComments,
+        currentApprovalSequence: null,
+        assignedApproverId: null,
+        systemStage: null
+      }
+    });
+  });
+
+  const updatedClaim = await prisma.claim.findUnique({
+    where: { id: claim.id },
+    include: { claimType: true, creator: true }
+  });
+
+  if (updatedClaim.creator?.email) {
+    try {
+      await sendClaimRejectedEmail({
+        to: updatedClaim.creator.email,
+        employeeName: updatedClaim.creator.name,
+        claimNumber: updatedClaim.claimNumber,
+        claimType: updatedClaim.claimType?.name ?? updatedClaim.claimType?.code,
+        amount: updatedClaim.amount,
+        rejectionComments: finalComments,
+        rejectedItems,
+        claimId: updatedClaim.id
+      });
+    } catch (err) {
+      console.error(`Claim rejection email FAILED for claim ${updatedClaim.id}:`, err);
+    }
+  } else {
+    console.warn(`Claim ${updatedClaim.id} creator has no email — rejection email not sent.`);
+  }
+
+  return updatedClaim;
 }
 
 
@@ -824,11 +901,8 @@ async finalizeClaim(claim, actor) {
   });
 }
 
-async reject(claim, actor, comments) {
+async reject(claim, actor, comments, lineItemDecisions) {
 
-  let currentStep = null;
-
- 
   if (claim.status !== "PENDING_APPROVAL" && claim.status !== "PARTIALLY_APPROVED") {
     throw new AppError("Claim is not awaiting approval", 400);
   }
@@ -845,12 +919,7 @@ async reject(claim, actor, comments) {
 
   await this.validateDepartmentalHead(claim, actor);
 
-  if (claim.systemStage === "HR") {
-    await this.validateActorIsSystemDeptHead(claim, actor, true);
-  } else if (claim.systemStage === "FINANCE") {
-    await this.validateActorIsSystemDeptHead(claim, actor, false);
-  } else {
-  currentStep = await prisma.claimApproval.findUnique({
+  const currentStep = await prisma.claimApproval.findUnique({
     where: { claimId_sequence: { claimId: claim.id, sequence: claim.currentApprovalSequence } }
   });
 
@@ -864,30 +933,58 @@ async reject(claim, actor, comments) {
 
   this.validateActorCanActOnStep(currentStep, actor, claim.amount);
 
+  // Persist per-line reject/approve decisions (if the approver used the
+  // line-wise Reject buttons) so the rejected row's full details — not
+  // just the free-text comment — can be surfaced in the claimant's email.
+  let rejectedItems = [];
 
-    await prisma.claimApproval.update({
-      where: { id: currentStep.id },
-      data: {
-        status: "REJECTED",
-        approverId: actor.id,
-        actionedAt: new Date(),
-        comments: comments ?? null
-      },
+  if (lineItemDecisions?.fieldName && claim.formData?.[lineItemDecisions.fieldName]) {
+
+    const fieldName = lineItemDecisions.fieldName;
+    const decisions = lineItemDecisions.decisions || {};
+    const editedRows = Array.isArray(lineItemDecisions.rows) ? lineItemDecisions.rows : null;
+
+    const updatedItems = claim.formData[fieldName].map((item, idx) => {
+      const edited = editedRows?.[idx] ?? {};
+      const status = decisions[idx] ?? item.lineStatus ?? "APPROVED";
+
+      return {
+        ...item,
+        ...edited,
+        lineStatus: status
+      };
     });
-  }
 
-  if (currentStep) {
-    await prisma.claimApprovalHistory.create({
+    rejectedItems = updatedItems.filter(item => item.lineStatus === "REJECTED");
+
+    claim = await prisma.claim.update({
+      where: { id: claim.id },
       data: {
-        claimApprovalId: currentStep.id,
-        actorId: actor.id,
-        action: "REJECTED",
-        comments
+        formData: { ...claim.formData, [fieldName]: updatedItems }
       }
     });
   }
 
-  return prisma.claim.update({
+  await prisma.claimApproval.update({
+    where: { id: currentStep.id },
+    data: {
+      status: "REJECTED",
+      approverId: actor.id,
+      actionedAt: new Date(),
+      comments: comments ?? null
+    },
+  });
+
+  await prisma.claimApprovalHistory.create({
+    data: {
+      claimApprovalId: currentStep.id,
+      actorId: actor.id,
+      action: "REJECTED",
+      comments
+    }
+  });
+
+  const updatedClaim = await prisma.claim.update({
     where: { id: claim.id },
     data: {
       status: "REJECTED",
@@ -897,8 +994,32 @@ async reject(claim, actor, comments) {
       assignedApproverId: null,
       systemStage: null,
     },
+    include: { claimType: true, creator: true }
   });
+
+  if (updatedClaim.creator?.email) {
+    try {
+      await sendClaimRejectedEmail({
+        to: updatedClaim.creator.email,
+        employeeName: updatedClaim.creator.name,
+        claimNumber: updatedClaim.claimNumber,
+        claimType: updatedClaim.claimType?.name ?? updatedClaim.claimType?.code,
+        amount: updatedClaim.amount,
+        rejectionComments: comments ?? null,
+        rejectedItems,
+        claimId: updatedClaim.id
+      });
+    } catch (err) {
+      console.error(`Claim rejection email FAILED for claim ${updatedClaim.id}:`, err);
+    }
+  } else {
+    console.warn(`Claim ${updatedClaim.id} creator has no email — rejection email not sent.`);
+  }
+
+  return updatedClaim;
 }
+
+
 
   validateSoD(claim, actor) {
     if (claim.createdBy === actor.id) {

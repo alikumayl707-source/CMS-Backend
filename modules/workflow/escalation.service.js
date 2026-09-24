@@ -12,8 +12,8 @@ class EscalationService {
   async run() {
     const settings = await escalationSettingsService.get();
 
-   await this._handleMatrixApprovals(settings);
-   await this._handleBypassStages(settings);
+   //await this._handleMatrixApprovals(settings);
+   //await this._handleBypassStages(settings);
   }
 
 

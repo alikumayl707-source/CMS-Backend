@@ -128,28 +128,13 @@ const [data, total] = await prisma.$transaction([
 
 const enrichedData = data.map(claim => ({
   ...claim,
- trackingStage:
-  claim.status === "APPROVED"
-    ? "✅ Claim Approved"
-
-    : claim.status === "REJECTED"
-    ? "❌ Claim Rejected"
-
-    : claim.systemStage === "FINANCE"
-    ? "💰 Awaiting Finance Approval"
-
-    : claim.systemStage === "HR"
-    ? "👥 Awaiting HR Approval"
-
-
-    : claim.assignedApprover?.name
-    ? `⏳ Awaiting ${claim.assignedApprover.name}` +
-      (claim.requiredApproverRole ? ` (${claim.requiredApproverRole})` : "")
-
-    : claim.requiredApproverRole
-    ? `⏳ Awaiting ${claim.requiredApproverRole}`
-
-    : "⏳ Pending Approval",
+trackingStage:
+  claim.status === "APPROVED" ? "✅ Claim Approved"
+  : claim.status === "REJECTED" ? "❌ Claim Rejected"
+  : claim.assignedApprover?.name
+    ? `⏳ Awaiting ${claim.assignedApprover.name}` + (claim.requiredApproverRole ? ` (${claim.requiredApproverRole})` : "")
+  : claim.requiredApproverRole ? `⏳ Awaiting ${claim.requiredApproverRole}`
+  : "⏳ Pending Approval",
 
 
  hoursInCurrentStage: Math.round(

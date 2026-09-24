@@ -168,12 +168,13 @@ class WorkflowDashboardRepository {
     });
   }
 
-  async getClaimWorkflow(claimId) {
+ async getClaimWorkflow(claimId) {
     const claim = await prisma.claim.findUnique({
       where: { id: claimId },
       include: {
         claimType: true,
         assignedApprover: true,
+        creator: { select: { id: true, name: true } },
         approvals: {
           include: { approver: true, role: true },
           orderBy: { sequence: "asc" }
@@ -188,17 +189,36 @@ class WorkflowDashboardRepository {
     const settings = await escalationSettingsService.get();
     const now = Date.now();
 
+    const cancellableStatuses = ["SUBMITTED", "PENDING_APPROVAL", "PARTIALLY_APPROVED"];
+
     return {
       claimId: claim.id,
       claimNumber: claim.claimNumber,
       status: claim.status,
       currentSequence: claim.currentApprovalSequence,
       currentApprover: claim.assignedApprover?.name,
+      submittedBy: claim.creator?.name ?? null,
+      submittedAt: claim.submittedAt ?? claim.createdAt,
+      completedAt:
+        claim.status === "APPROVED" ||
+        claim.status === "REJECTED" ||
+        claim.status === "CANCELLED"
+          ? claim.updatedAt
+          : null,
+      // Cancel is only ever performed by the claim's own creator
+      // (claim-approval.service.js's cancel() throws otherwise), so
+      // there is no separate actor to look up — reuse creator.name.
+      cancelledBy: claim.status === "CANCELLED" ? claim.creator?.name ?? null : null,
+      canCancel: cancellableStatuses.includes(claim.status),
+      // Sent so the frontend can render a "time until escalation" progress
+      // bar against the same threshold isOverdue is computed from below.
+      escalateAfterMinutes: settings.escalateAfterHours * 60,
       workflowSteps: claim.approvals.map(step => {
 
         const stepStart = new Date(step.createdAt).getTime();
         const stepEnd = step.actionedAt ? new Date(step.actionedAt).getTime() : now;
-        const hoursInStep = Math.round((stepEnd - stepStart) / 36e5);
+        const elapsedMs = stepEnd - stepStart;
+        const hoursInStep = Math.round(elapsedMs / 36e5);
 
         return {
           id: step.id,
@@ -209,11 +229,15 @@ class WorkflowDashboardRepository {
           actionedAt: step.actionedAt,
           comments: step.comments,
           hoursInStep,
+          // Minute-level granularity for UI display, since hoursInStep
+          // rounds sub-hour durations down to 0 and loses the detail.
+          elapsedMinutes: Math.round(elapsedMs / 60000),
           isOverdue: step.status === "PENDING" && hoursInStep >= settings.escalateAfterHours
         };
       })
     };
   }
+
 }
 
 module.exports = new WorkflowDashboardRepository();
