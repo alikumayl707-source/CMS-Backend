@@ -64,7 +64,13 @@ class ApprovalMatrixRepository {
       }
     };
   }
-
+  async findAllForClaimType(claimType) {
+    return prisma.approvalMatrix.findMany({
+      where: { claimType },
+      include: { rules: true, approvers: true },
+      orderBy: { id: "desc" }
+    });
+  }
   async create(data) {
     const resolvedDepartmentId =
       data.departmentId !== undefined && data.departmentId !== null

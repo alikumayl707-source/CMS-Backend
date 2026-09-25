@@ -1,109 +1,83 @@
 const prisma = require("../../prisma/index");
 
-async function getAuditLogs(
-  page = 1,
-  pageSize = 10,
-  search = "",
-  filters = {}
-) {
-  const skip = (page - 1) * pageSize;
+/** Trimmed string, or undefined when empty. */
+const text = value => {
+  const v = String(value ?? "").trim();
+  return v || undefined;
+};
 
-  const where = {
-    ...(search && {
+// MySQL's default collation already compares case-insensitively, and Prisma
+// rejects `mode: "insensitive"` on MySQL, so plain `contains` is enough.
+function buildWhere(search, filters = {}) {
+  const and = [];
+
+  const term = text(search);
+  if (term) {
+    and.push({
       OR: [
-        { action: { contains: search, mode: "insensitive" } },
-        { entity: { contains: search, mode: "insensitive" } },
-        { module: { contains: search, mode: "insensitive" } },
-      ],
-    }),
+        { action: { contains: term } },
+        { entity: { contains: term } },
+        { module: { contains: term } },
+        { entityId: { contains: term } },
+        { user: { name: { contains: term } } }
+      ]
+    });
+  }
 
-    ...(filters.action && {
-      action: {
-        contains: filters.action,
-        mode: "insensitive",
-      },
-    }),
+  if (text(filters.action)) and.push({ action: { contains: text(filters.action) } });
+  if (text(filters.module)) and.push({ module: { contains: text(filters.module) } });
+  if (text(filters.entity)) and.push({ entity: { contains: text(filters.entity) } });
 
-    ...(filters.module && {
-      module: {
-        contains: filters.module,
-        mode: "insensitive",
-      },
-    }),
+  const statusCode = Number(filters.statusCode);
+  if (text(filters.statusCode) && Number.isInteger(statusCode)) {
+    and.push({ statusCode });
+  }
 
-    ...(filters.entity && {
-      entity: {
-        contains: filters.entity,
-        mode: "insensitive",
-      },
-    }),
+  if (filters.success === "true" || filters.success === "false") {
+    and.push({ success: filters.success === "true" });
+  }
 
-    ...(filters.statusCode && {
-      statusCode: Number(filters.statusCode),
-    }),
-
-    ...(filters.success !== undefined &&
-      filters.success !== "" && {
-        success: filters.success === "true",
-      }),
-
-    ...(filters.userName && {
-      user: {
-        name: {
-          contains: filters.userName,
-          mode: "insensitive",
-        },
-      },
-    }),
-
-    ...(filters.userEmail && {
-      user: {
-        email: {
-          contains: filters.userEmail,
-          mode: "insensitive",
-        },
-      },
-    }),
+  // Name and email are combined, so one can't overwrite the other.
+  const user = {
+    ...(text(filters.userName) ? { name: { contains: text(filters.userName) } } : {}),
+    ...(text(filters.userEmail) ? { email: { contains: text(filters.userEmail) } } : {})
   };
+  if (Object.keys(user).length) and.push({ user });
 
-  const [total, logs] = await Promise.all([
+  return and.length ? { AND: and } : {};
+}
+
+async function getAuditLogs(page = 1, pageSize = 10, search = "", filters = {}) {
+  const skip = (page - 1) * pageSize;
+  const where = buildWhere(search, filters);
+
+  const [total, logs] = await prisma.$transaction([
     prisma.auditLog.count({ where }),
-
     prisma.auditLog.findMany({
       where,
       skip,
-      take: Number(pageSize),
+      take: pageSize,
       include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
+        user: { select: { id: true, name: true, email: true } }
       },
-      orderBy: {
-        createdAt: "desc",
-      },
-    }),
+      orderBy: { createdAt: "desc" }
+    })
   ]);
 
-  const enrichedData = logs.map((log) => ({
-    ...log,
-    statusLabel: log.success ? "Success" : "Failed",
-    userDisplayName: log.user?.name || "System",
-  }));
-
   return {
-    data: enrichedData,
+    data: logs.map(log => ({
+      ...log,
+      statusLabel: log.success ? "Success" : "Failed",
+      userDisplayName: log.user?.name || "System"
+    })),
     pagination: {
       total,
-      page: Number(page),
-      pageSize: Number(pageSize),
+      page,
+      pageSize,
       totalPages: Math.ceil(total / pageSize),
       hasNext: page * pageSize < total,
-      hasPrevious: page > 1,
-    },
+      hasPrevious: page > 1
+    }
   };
 }
 
@@ -111,14 +85,12 @@ async function getAuditById(id) {
   return prisma.auditLog.findUnique({
     where: { id },
     include: {
-      user: {
-        select: { id: true, name: true, email: true }
-      }
+      user: { select: { id: true, name: true, email: true } }
     }
   });
 }
 
 module.exports = {
   getAuditLogs,
-  getAuditById   
+  getAuditById
 };

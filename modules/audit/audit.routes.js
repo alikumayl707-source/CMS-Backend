@@ -4,7 +4,8 @@ const router = express.Router();
 
 const controller =
   require("./audit.controller");
-
+const audit =
+  require("../../middleware/audit.middleware");
 const authorize =
   require("../../middleware/authorize.middleware");
 
@@ -17,6 +18,7 @@ router.get(
 router.get(
   "/logs/:id",
   authorize("AUDIT_VIEW"),
+  audit("CLAIM_VIEW", "CLAIM"),
   controller.getAuditById
 );
 

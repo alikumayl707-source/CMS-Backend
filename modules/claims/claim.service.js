@@ -369,12 +369,16 @@ async submit(userId, data) {
             ...(existing.formData || {})
         });
 
-        if (!resolvedWorkflow) {
-            throw new AppError(
-            "Approval process is missing. Please configure approvers for this claim.",
-            422
-        );
+          if (!resolvedWorkflow) {
+            const reason = await approvalMatrixService.explainNoWorkflow({
+                claimType: claimType.code,
+                departmentId: claimDepartmentId,
+                amount: resolvedAmount,
+                ...(existing.formData || {})
+            });
 
+            console.warn(`Approval routing for claim ${existingId}: ${reason}`);
+            throw new AppError(reason, 422);
         }
     }
 
