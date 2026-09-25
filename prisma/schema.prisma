@@ -58,7 +58,7 @@ model ClaimApprovalHistory {
   actorId         Int
 
   action   String
-  comments String?
+  comments String? @db.Text
 
   createdAt DateTime @default(now())
 
@@ -121,7 +121,7 @@ model ClaimApproval {
   status String?
 
   actionedAt DateTime?
-  comments   String?
+  comments   String? @db.Text
 
   isParallel Boolean @default(false)
   groupKey   String?
@@ -194,7 +194,7 @@ model Claim {
   duplicatesOfThis   Claim[] @relation("ClaimDuplicate")
 
   rejectedBy        Int?
-  rejectionComments String?
+  rejectionComments String? @db.Text
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt

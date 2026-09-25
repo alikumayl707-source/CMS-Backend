@@ -1,6 +1,6 @@
 const claimService =
       require("./claim.service");
-
+const claimVoucherService = require("./cliam.voucher.service");
   const claimRepository =
     require("./claim.repository");
 
@@ -82,7 +82,22 @@ async getWorkflow(req,res,next){
       }
   }
 
+async downloadVoucher(req, res, next) {
+  try {
+    const { buffer, fileName } = await claimVoucherService.generate(
+      Number(req.params.id),
+      req.user
+    );
 
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Content-Length", buffer.length);
+
+    return res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
+}
 
 async approve(req, res, next) {
   try {
@@ -216,23 +231,14 @@ async getMyClaims(req, res, next) {
       }
     }
 
-    async getById(req, res, next) {
-
-      try {
-
-        const claim = await claimService.getById(
-          Number(req.params.id)
-        );
-
-        return res.json({
-          success: true,
-          data: claim
-        });
-
-      } catch (error) {
-        next(error);
-      }
-    }
+  async getById(req, res, next) {
+  try {
+    const claim = await claimService.getById(Number(req.params.id), req.user);
+    return res.json({ success: true, data: claim });
+  } catch (error) {
+    next(error);
+  }
+}
 
     async saveDraft(req, res, next) {
 

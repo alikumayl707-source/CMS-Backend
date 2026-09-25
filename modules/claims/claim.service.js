@@ -84,17 +84,42 @@ async getAll(query) {
     ...rest,
   });
 }
+async getById(id, viewer = null) {
 
-    async getById(id) {
+    const claim = await claimRepository.findById(id);
 
-        const claim = await claimRepository.findById(id);
-
-        if (!claim) {
-            throw new AppError("Claim not found", 404);
-        }
-
-        return claim;
+    if (!claim) {
+        throw new AppError("Claim not found", 404);
     }
+
+    if (viewer) {
+        claim.viewerCanAct = this.canViewerAct(claim, viewer);
+    }
+
+    return claim;
+}
+
+/** Same rules advance()/reject() enforce, so the UI only offers what the API will accept. */
+canViewerAct(claim, viewer) {
+
+    if (!["PENDING_APPROVAL", "PARTIALLY_APPROVED"].includes(claim.status)) return false;
+
+    const viewerId = Number(viewer.id);
+
+    // Segregation of duties: claimant and reviewer can never decide.
+    if (Number(claim.createdBy) === viewerId) return false;
+    if (claim.reviewedBy != null && Number(claim.reviewedBy) === viewerId) return false;
+
+    const roleIds = (viewer.userRoles ?? []).map(r => r.roleId ?? r.role?.id);
+
+    return (claim.approvals ?? []).some(step =>
+        step.sequence === claim.currentApprovalSequence &&
+        step.status === "PENDING" &&
+        (step.approverId != null
+            ? Number(step.approverId) === viewerId
+            : step.roleId != null && roleIds.includes(step.roleId))
+    );
+}
 
     async listMyDrafts(userId) {
         return claimRepository.findDraftsByUser(userId);
@@ -147,18 +172,50 @@ async resubmitAfterRejection(userId, data) {
         throw new AppError("You can only resubmit your own claims", 403);
     }
 
+  const formData = this.stripLineDecisions(data.formData ?? existing.formData);
 
-    await claimRepository.update(existingId, {
-        status: "DRAFT",
-        rejectedBy: null,
-        rejectionComments: null,
-        currentApprovalSequence: null,
-        assignedApproverId: null,
-        reviewedBy: null,
-        approvedBy: null
+    await prisma.$transaction(async (tx) => {
+
+        await tx.claim.update({
+            where: { id: existingId },
+            data: {
+                status: "DRAFT",
+                formData,
+                amount: this.resolveAmount(existing.claimType?.schema, formData),
+                incidentDate: data.incidentDate ? new Date(data.incidentDate) : existing.incidentDate,
+                rejectedBy: null,
+                rejectionComments: null,
+                currentApprovalSequence: null,
+                assignedApproverId: null,
+                reviewedBy: null,
+                approvedBy: null
+            }
+        });
+
+       await tx.claimApproval.updateMany({
+            where: { claimId: existingId, status: "PENDING" },
+            data: { status: "SKIPPED" }
+        });
     });
 
     return this.submit(userId, data);
+}
+
+stripLineDecisions(formData) {
+    const isPlainObject = v => v !== null && typeof v === "object" && !Array.isArray(v);
+
+    return Object.fromEntries(
+        Object.entries(formData ?? {}).map(([key, value]) => [
+            key,
+            Array.isArray(value)
+                ? value.map(item => {
+                    if (!isPlainObject(item)) return item;
+                    const { lineStatus, lineRejectionComment, ...rest } = item;
+                    return rest;
+                })
+                : value
+        ])
+    );
 }
 async getMyClaims(userId, query) {
 

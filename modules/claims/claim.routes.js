@@ -173,7 +173,13 @@ router.post(
     audit("SUBMIT_CLAIM", "CLAIM"),
     claimController.submit
 );
-
+ router.get(
+  "/:id/voucher",
+  loadClaimResource,
+  authorize("CLAIM_VIEW"),
+  audit("CLAIM_VOUCHER_DOWNLOAD", "CLAIM"),
+  claimController.downloadVoucher
+);
 router.post(
     "/:id/documents",
     authorize("CLAIM_DOCUMENT_UPLOAD"),
