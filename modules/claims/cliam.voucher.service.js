@@ -8,7 +8,7 @@ const LOGO_PATH = process.env.VOUCHER_LOGO_PATH || null;
 const CURRENCY = process.env.VOUCHER_CURRENCY || "PKR";
 const TIME_ZONE = process.env.VOUCHER_TIME_ZONE || "Asia/Karachi";
 
-/** Nothing is payable on these, so no voucher is issued. */
+
 const NOT_ISSUABLE = ["DRAFT", "REJECTED", "CANCELLED", "RETURNED"];
 
 const PROFILE_SOURCES = ["employeeName", "employeeDesignation", "employeeDepartment"];
@@ -42,7 +42,7 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
 
-  // "2026-09-01" is a calendar date: format it in UTC so it never shifts a day.
+
   return date.toLocaleDateString("en-GB", {
     day: "2-digit",
     month: "short",
@@ -108,7 +108,6 @@ function numberToWords(n) {
   return parts.join(" ");
 }
 
-/** 15250.5 → "Rupees Fifteen Thousand Two Hundred Fifty and Fifty Paisa Only" */
 function amountInWords(amount) {
   const total = Math.round((Number(amount) || 0) * 100);
   const rupees = Math.floor(total / 100);
@@ -164,8 +163,7 @@ class ClaimVoucherService {
     };
   }
 
-  /* ── Data ── */
-
+  
   voucherNumber(claim) {
     return claim.claimNumber
       ? `PV-${claim.claimNumber.replace(/^CLM-/, "")}`
@@ -232,20 +230,6 @@ class ClaimVoucherService {
       ? approvedLines.reduce((sum, l) => sum + l.amount, 0)
       : Number(claim.amount) || 0;
 
-    // Totals per GL No. + Charge Head, for posting.
-    const glMap = new Map();
-    for (const line of approvedLines) {
-      const glNo = String(line.row.glNo ?? "").trim() || "-";
-      const chargeHead = String(line.row.chargeHead ?? "").trim() || "-";
-      const key = `${glNo}\u0000${chargeHead}`;
-      const entry = glMap.get(key) ?? { glNo, chargeHead, lines: 0, amount: 0 };
-      entry.lines++;
-      entry.amount += line.amount;
-      glMap.set(key, entry);
-    }
-
-    const glSummary = [...glMap.values()].sort((a, b) => a.glNo.localeCompare(b.glNo));
-
     return {
       payee,
       details,
@@ -253,12 +237,10 @@ class ClaimVoucherService {
       lines,
       hasRejected: lines.some(l => l.rejected),
       gross,
-      payable,
-      glSummary
+      payable
     };
   }
 
-  /* ── Rendering ── */
 
   render(claim, data, viewer) {
     return new Promise((resolve, reject) => {
@@ -294,11 +276,6 @@ class ClaimVoucherService {
         }
 
         this.drawTotals(doc, data);
-
-        if (data.glSummary.length) {
-          this.sectionTitle(doc, "Accounting summary");
-          this.drawGlSummary(doc, data);
-        }
 
         this.sectionTitle(doc, "Approval trail");
         this.drawApprovalTrail(doc, claim);
@@ -507,7 +484,7 @@ class ClaimVoucherService {
 
   /** Relative column width: serial numbers narrow, dates never wrap, free text widest. */
   columnWeight(child) {
-    if (/^(s.?s*no.?|sr.?s*no.?|serial)/i.test(String(child.label ?? child.controlName).trim())) return 0.6;
+    if (/^(s\.?\s*no\.?|sr\.?\s*no\.?|serial)/i.test(String(child.label ?? child.controlName).trim())) return 0.6;
     if (child.type === "date") return 1.25;
     if (child.type === "number") return 0.8;
     return 1.5;
@@ -527,11 +504,6 @@ class ClaimVoucherService {
         weight: this.columnWeight(child),
         value: line => this.displayValue(child, line.row[child.controlName])
       }));
-
-    columns.push(
-      { label: "GL No.", weight: 1, value: line => line.row.glNo },
-      { label: "Charge Head", weight: 1.3, value: line => line.row.chargeHead }
-    );
 
     if (data.hasRejected) {
       columns.push({ label: "Status", weight: 0.9, value: line => (line.rejected ? "Rejected" : "Approved") });
@@ -596,29 +568,6 @@ class ClaimVoucherService {
       .text(amountInWords(data.payable));
 
     doc.x = MARGIN;
-  }
-
-  drawGlSummary(doc, data) {
-    const items = [
-      ...data.glSummary,
-      { glNo: "Total", chargeHead: "", lines: data.glSummary.reduce((s, g) => s + g.lines, 0), amount: data.payable, total: true }
-    ];
-
-    this.drawTable(doc, [
-      { label: "GL No.", weight: 1.2, value: g => g.glNo },
-      { label: "Charge Head", weight: 2.4, value: g => g.chargeHead || " " },
-      { label: "Lines", weight: 0.6, align: "right", value: g => g.lines },
-      { label: `Amount (${CURRENCY})`, weight: 1.3, align: "right", value: g => money(g.amount) }
-    ], items, {
-      bold: g => g.total,
-      fill: g => (g.total ? COLOR.head : null)
-    });
-
-    if (data.glSummary.some(g => g.glNo === "-" || g.chargeHead === "-")) {
-      doc.moveDown(0.4);
-      doc.font("Helvetica").fontSize(8).fillColor(COLOR.red)
-        .text("Some approved lines have no GL No. or Charge Head.", MARGIN, doc.y);
-    }
   }
 
   stepDecision(claim, step) {
@@ -697,9 +646,7 @@ class ClaimVoucherService {
     doc.x = MARGIN;
     doc.y = lineY + 40;
   }
-
-  /** Watermark (until fully approved), footer and page numbers on every page. */
-  decoratePages(doc, claim, viewer) {
+ decoratePages(doc, claim, viewer) {
     const range = doc.bufferedPageRange();
     const watermark = claim.status === "APPROVED" ? null : "PROVISIONAL - NOT APPROVED";
     const generated = `System-generated voucher · Generated ${formatDateTime(new Date())}` +
@@ -708,8 +655,7 @@ class ClaimVoucherService {
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
 
-      // Writing inside the bottom margin would otherwise start a new page.
-      const bottomMargin = doc.page.margins.bottom;
+     const bottomMargin = doc.page.margins.bottom;
       doc.page.margins.bottom = 0;
 
       if (watermark) {

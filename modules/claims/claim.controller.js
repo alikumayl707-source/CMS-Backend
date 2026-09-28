@@ -107,7 +107,7 @@ async approve(req, res, next) {
       claim,
       req.user,
       req.body.comments,
-      req.body.lineItemDecisions   // ← NEW
+      req.body.lineItemDecisions   
     );
 
     return res.json({ success: true, data: result });
@@ -381,9 +381,6 @@ async downloadDocument(
       }
     }
 
-    /* ==============================================================
-       REASSIGN APPROVER — NEW
-    ============================================================== */
 
     async getReassignOptions(req, res, next) {
 
