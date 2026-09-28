@@ -9,26 +9,7 @@ const notificationService =
  require("../workflow/notification.service");
 const prisma = require("../../prisma/index");
 
-/* ──────────────────────────────────────────────────────────────
-   Line-item accounting codes (GL No. / Charge Head)
-
-   Entered by approvers on the approval screen and stored on each
-   line of formData[fieldName] as `glNo` and `chargeHead`.
-   Set REQUIRE_GL_CODING=true in .env to make both mandatory on
-   every approved line before a claim can be approved.
-   ────────────────────────────────────────────────────────────── */
-
-const GL_PATTERN = /^[A-Za-z0-9.\-\/]+$/;
-
-const CODING_FIELDS = [
-  { key: "glNo", label: "GL No.", maxLength: 20, pattern: GL_PATTERN },
-  { key: "chargeHead", label: "Charge Head", maxLength: 60, pattern: null }
-];
-
-const REQUIRE_GL_CODING = process.env.REQUIRE_GL_CODING === "true";
-
-/** claimApprovalHistory.comments is a Prisma String (VARCHAR(191) on MySQL). */
-const HISTORY_COMMENT_MAX = 191;
+const COMMENT_MAX = 5000;
 
 class ClaimApprovalService {
 
@@ -110,100 +91,107 @@ class ClaimApprovalService {
     return null;
   }
 
-  /* ──────────────────────────────────────────────────────────────
-     Line items: decisions, rejection reasons and GL coding
-     ────────────────────────────────────────────────────────────── */
+  async resolveSelfApproval(claim, approverId, roleName) {
+    if (approverId == null || Number(approverId) !== Number(claim.createdBy)) {
+      return approverId;
+    }
 
-  /** Trims a submitted code; empty strings become null (i.e. "cleared"). */
-  normalizeCodingValue(value) {
-    if (value === undefined || value === null) return null;
-    const trimmed = String(value).trim();
-    return trimmed.length ? trimmed : null;
+    const creator = await prisma.user.findUnique({
+      where: { id: claim.createdBy },
+      select: { reportsToId: true }
+    });
+
+    if (!creator?.reportsToId) {
+      throw new AppError(
+        "This claim would be sent to the claimant for approval, and they have no manager to send it to instead. " +
+        "Ask an administrator to update the approval workflow.",
+        422
+      );
+    }
+
+    if (!roleName) {
+      return creator.reportsToId;
+    }
+
+    const eligible = await organizationService.findEligibleApprover(
+      creator.reportsToId,
+      roleName,
+      Number(claim.amount)
+    );
+
+    if (!eligible?.id) {
+      throw new AppError(
+        `No one above the claimant holds the "${roleName}" role needed to approve this claim.`,
+        422
+      );
+    }
+
+    return eligible.id;
   }
 
-  /**
-   * Merges the approver's line-item decisions into the claim's line items.
-   *
-   * lineItemDecisions = {
-   *   fieldName: "expenses",
-   *   decisions: { 0: "APPROVED", 1: "REJECTED", ... },
-   *   comments:  { 1: "Receipt does not match", ... },
-   *   coding:    { 0: { glNo: "5010-200", chargeHead: "Staff Welfare" }, ... },
-   *   rows:      [ ...edited line objects... ]
-   * }
-   *
-   * Validates everything up front and throws before anything is written, so a
-   * claim never ends up half-updated. Returns the new items, the rejected ones,
-   * and a human-readable list of GL coding changes for the audit trail.
-   */
-  buildLineItems(claim, lineItemDecisions, { enforceRequiredCoding }) {
+  async trimChainForClaimant(approvers, claim) {
+    const creatorId = Number(claim.createdBy);
+    const lastOwnIndex = approvers.map(a => Number(a.specificUserId)).lastIndexOf(creatorId);
+
+    if (lastOwnIndex === -1) {
+      return approvers;
+    }
+
+    const remaining = approvers.slice(lastOwnIndex + 1);
+
+    if (!remaining.length) {
+      const creator = await prisma.user.findUnique({
+        where: { id: creatorId },
+        select: { reportsToId: true }
+      });
+
+      if (!creator?.reportsToId) {
+        throw new AppError(
+          "You are the final approver in this workflow and have no manager to approve your claim. " +
+          "Ask an administrator to add an approver above you.",
+          422
+        );
+      }
+
+      remaining.push({
+        ...approvers[lastOwnIndex],
+        specificUserId: creator.reportsToId,
+        roleId: null,
+        role: null
+      });
+    }
+
+    const renumbered = new Map();
+    return remaining.map(step => {
+      if (!renumbered.has(step.sequence)) {
+        renumbered.set(step.sequence, renumbered.size + 1);
+      }
+      return { ...step, sequence: renumbered.get(step.sequence) };
+    });
+  }
+
+
+  buildLineItems(claim, lineItemDecisions) {
 
     const fieldName = lineItemDecisions.fieldName;
     const decisions = lineItemDecisions.decisions || {};
     const lineComments = lineItemDecisions.comments || {};
-    const coding = lineItemDecisions.coding || {};
     const editedRows = Array.isArray(lineItemDecisions.rows) ? lineItemDecisions.rows : null;
-
-    const codingChanges = [];
 
     const updatedItems = claim.formData[fieldName].map((item, idx) => {
 
-      const edited = editedRows?.[idx] ?? {};
       const status = decisions[idx] ?? item.lineStatus ?? "APPROVED";
       const isRejected = status === "REJECTED";
 
-      const next = {
-        ...item,
-        ...edited,
+      const {...merged } = { ...item, ...(editedRows?.[idx] ?? {}) };
+
+      return {
+        ...merged,
         lineStatus: status,
         lineRejectionComment: isRejected
           ? (String(lineComments[idx] ?? "").trim() || null)
           : null
       };
-
-      const lineChanges = [];
-
-      for (const field of CODING_FIELDS) {
-
-        // Prefer the explicit `coding` map; fall back to the edited row;
-        // if neither was sent, keep whatever the line already had.
-        // Rejected lines aren't paid, so their codes can't be changed.
-        const submitted = coding[idx]?.[field.key] ?? edited[field.key];
-        const value = (isRejected || submitted === undefined)
-          ? (item[field.key] ?? null)
-          : this.normalizeCodingValue(submitted);
-
-        if (!isRejected) {
-          if (value && value.length > field.maxLength) {
-            throw new AppError(
-              `Line ${idx + 1}: ${field.label} cannot be longer than ${field.maxLength} characters`,
-              400
-            );
-          }
-          if (value && field.pattern && !field.pattern.test(value)) {
-            throw new AppError(
-              `Line ${idx + 1}: ${field.label} can only contain letters, numbers, "-", "." and "/"`,
-              400
-            );
-          }
-          if (enforceRequiredCoding && REQUIRE_GL_CODING && !value) {
-            throw new AppError(`Line ${idx + 1} needs a ${field.label}`, 400);
-          }
-        }
-
-        next[field.key] = value;
-
-        const before = item[field.key] ?? null;
-        if (before !== value) {
-          lineChanges.push(`${field.label} ${before ?? "—"} → ${value ?? "—"}`);
-        }
-      }
-
-      if (lineChanges.length) {
-        codingChanges.push(`Line ${idx + 1}: ${lineChanges.join("; ")}`);
-      }
-
-      return next;
     });
 
     const rejectedItems = updatedItems.filter(item => item.lineStatus === "REJECTED");
@@ -212,23 +200,11 @@ class ClaimApprovalService {
       throw new AppError("A rejection comment is required for every rejected line item", 400);
     }
 
-    return { fieldName, updatedItems, rejectedItems, codingChanges };
+    return { fieldName, updatedItems, rejectedItems };
   }
 
- async recordCodingChanges(tx, claimApprovalId, actorId, codingChanges) {
-    for (const change of codingChanges) {
-      await tx.claimApprovalHistory.create({
-        data: {
-          claimApprovalId,
-          actorId,
-          action: "CODING_UPDATED",
-          comments: this.clampComment(change)
-        }
-      });
-    }
-  }
 
- async commitRejection(tx, { claim, actor, currentStep, comments, built }) {
+  async commitRejection(tx, { claim, actor, currentStep, comments, built }) {
 
     if (built) {
       await tx.claim.update({
@@ -237,10 +213,8 @@ class ClaimApprovalService {
           formData: { ...claim.formData, [built.fieldName]: built.updatedItems }
         }
       });
-
-      await this.recordCodingChanges(tx, currentStep.id, actor.id, built.codingChanges);
     }
-  const { count } = await tx.claimApproval.updateMany({
+ const { count } = await tx.claimApproval.updateMany({
       where: { id: currentStep.id, status: "PENDING" },
       data: {
         status: "REJECTED",
@@ -253,7 +227,6 @@ class ClaimApprovalService {
     if (count === 0) {
       throw new AppError("This step has already been actioned. Refresh and try again.", 409);
     }
-
     await tx.claimApproval.updateMany({
       where: {
         claimId: claim.id,
@@ -286,6 +259,7 @@ class ClaimApprovalService {
     });
   }
 
+  /** Sent after the transaction commits. An email failure never undoes a rejection. */
   async sendRejectionEmail(updatedClaim, comments, rejectedItems) {
     if (!updatedClaim.creator?.email) {
       console.warn(`Claim ${updatedClaim.id} creator has no email — rejection email not sent.`);
@@ -591,7 +565,10 @@ async initializeChain(claim, creatorId, resolvedMatrix = null) {
     }
   }
 
-  const approvers = [...scopedApprovers].sort((a, b) => a.sequence - b.sequence);
+  const approvers = await this.trimChainForClaimant(
+    [...scopedApprovers].sort((a, b) => a.sequence - b.sequence),
+    claim
+  );
 
   const firstSteps = approvers.filter(x => x.sequence === 1);
   const firstStep = firstSteps[0];
@@ -610,20 +587,21 @@ async initializeChain(claim, creatorId, resolvedMatrix = null) {
     let resolvedApproverId = step.specificUserId ?? null;
 
     if (!resolvedApproverId && step.role) {
-
       const eligible = await organizationService.findEligibleApprover(
         walkStartUserId,
         step.role.name,
         Number(claim.amount)
       );
-
       resolvedApproverId = eligible?.id ?? null;
+    }
 
-      if (resolvedApproverId) {
-        walkStartUserId = resolvedApproverId;
-      }
+    resolvedApproverId = await this.resolveSelfApproval(
+      claim,
+      resolvedApproverId,
+      step.role?.name ?? null
+    );
 
-    } else if (resolvedApproverId) {
+    if (resolvedApproverId) {
       walkStartUserId = resolvedApproverId;
     }
 
@@ -685,6 +663,17 @@ async initializeChain(claim, creatorId, resolvedMatrix = null) {
         create: row
       });
     }
+
+    // A resubmitted claim can have a shorter chain than last time; retire the
+    // leftover steps so the claim never moves on to them.
+    await tx.claimApproval.updateMany({
+      where: {
+        claimId: claim.id,
+        status: "PENDING",
+        sequence: { notIn: approvalRows.map(r => r.sequence) }
+      },
+      data: { status: "SKIPPED" }
+    });
 
     return tx.claim.update({
       where: { id: claim.id },
@@ -777,7 +766,7 @@ async advance(claim, actor, comments, lineItemDecisions) {
 
   // Validate everything up front. Throws before anything is written.
   const built = this.hasLineItems(claim, lineItemDecisions)
-    ? this.buildLineItems(claim, lineItemDecisions, { enforceRequiredCoding: true })
+    ? this.buildLineItems(claim, lineItemDecisions)
     : null;
 
   // Even a single rejected line item rejects the whole claim.
@@ -802,8 +791,6 @@ async advance(claim, actor, comments, lineItemDecisions) {
           amount: effectiveAmount
         }
       });
-
-      await this.recordCodingChanges(tx, currentStep.id, actor.id, built.codingChanges);
     }
 
     const { count } = await tx.claimApproval.updateMany({
@@ -852,6 +839,7 @@ async advance(claim, actor, comments, lineItemDecisions) {
     const nextStep = await tx.claimApproval.findFirst({
       where: {
         claimId: claim.id,
+        status: "PENDING",
         sequence: { gt: currentStep.sequence }
       },
       orderBy: { sequence: "asc" },
@@ -871,6 +859,8 @@ async advance(claim, actor, comments, lineItemDecisions) {
         );
         eligibleId = eligible?.id ?? null;
       }
+
+      eligibleId = await this.resolveSelfApproval(claim, eligibleId, nextStep.role?.name ?? null);
 
       if (!eligibleId) {
         // Throwing here rolls back the line items too, so the approver can retry cleanly.
@@ -1061,6 +1051,8 @@ async finalizeClaim(claim, actor) {
     }
   });
 }
+
+  /** Trims and caps a comment so it always fits its column. Empty → null. */
   clampComment(value) {
     if (value === undefined || value === null) return null;
     const text = String(value).trim();
@@ -1073,6 +1065,7 @@ async finalizeClaim(claim, actor) {
       Array.isArray(claim.formData?.[lineItemDecisions.fieldName])
     );
   }
+
 async reject(claim, actor, comments, lineItemDecisions) {
 
   if (claim.status !== "PENDING_APPROVAL" && claim.status !== "PARTIALLY_APPROVED") {
@@ -1113,7 +1106,7 @@ async reject(claim, actor, comments, lineItemDecisions) {
 
   // Validate everything up front. Throws before anything is written.
   const built = this.hasLineItems(claim, lineItemDecisions)
-    ? this.buildLineItems(claim, lineItemDecisions, { enforceRequiredCoding: false })
+    ? this.buildLineItems(claim, lineItemDecisions)
     : null;
 
   const updatedClaim = await prisma.$transaction(
